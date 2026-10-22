@@ -4,10 +4,14 @@ from io import BytesIO
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from sqlalchemy.orm import Session
 
+from pathlib import Path
+
 from app import agent, analytics, bootstrap, bus, creative, storage
+from app.config import CREATIVE_DIR
 from app.db import get_db, init_db
 from app.models import Advertiser, Campaign, CampaignPlan, Creative, Geofence, Insight, ScreenSpec, Seat
 from app.schemas import AdvertiserIn, AdvertiserOut, CampaignIn, CampaignOut, ChatIn, PlanIn, StateIn
@@ -24,6 +28,8 @@ app.add_middleware(
 
 @app.on_event("startup")
 def on_startup() -> None:
+    Path(CREATIVE_DIR).mkdir(parents=True, exist_ok=True)
+    app.mount("/creatives", StaticFiles(directory=CREATIVE_DIR), name="creatives")
     init_db()
     from app.db import SessionLocal
 

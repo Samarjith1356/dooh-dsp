@@ -66,31 +66,6 @@ services:
         soft: 262144
         hard: 262144
 
-  minio:
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: minio
-      MINIO_ROOT_PASSWORD: minio12345
-    ports:
-      - "9002:9000"
-      - "9001:9001"
-    volumes:
-      - minio_data:/data
-
-  minio-init:
-    image: minio/mc:latest
-    depends_on:
-      - minio
-    entrypoint: >
-      /bin/sh -c "
-      sleep 3;
-      mc alias set local http://minio:9000 minio minio12345;
-      mc mb -p local/creatives || true;
-      mc anonymous set download local/creatives;
-      exit 0;
-      "
-
   campaign-api:
     build:
       context: ..
@@ -99,15 +74,14 @@ services:
       DATABASE_URL: postgresql+psycopg://dooh:dooh@postgres:5432/dooh_dsp
       REDIS_URL: redis://redis:6379/0
       KAFKA_BROKERS: redpanda:9092
-      MINIO_ENDPOINT: minio:9000
-      MINIO_ACCESS_KEY: minio
-      MINIO_SECRET_KEY: minio12345
-      MINIO_BUCKET: creatives
-      MINIO_PUBLIC_URL: http://localhost:9002/creatives
+      CREATIVE_DIR: /data/creatives
+      CREATIVE_PUBLIC_URL: http://localhost:8000/creatives
       BRAIN_URL: http://brain:8001
       CLICKHOUSE_HOST: clickhouse
       CLICKHOUSE_HTTP_PORT: 8123
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    volumes:
+      - creative_data:/data/creatives
     ports:
       - "8000:8000"
     depends_on:
@@ -189,4 +163,4 @@ services:
 volumes:
   postgres_data:
   clickhouse_data:
-  minio_data:
+  creative_data:
