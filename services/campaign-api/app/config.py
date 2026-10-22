@@ -1,0 +1,15 @@
+import os
+
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+psycopg://dooh:dooh@localhost:5432/dooh_dsp")
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+KAFKA_BROKERS = os.getenv("KAFKA_BROKERS", "localhost:19092")
+MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9002")
+MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minio")
+MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minio12345")
+MINIO_BUCKET = os.getenv("MINIO_BUCKET", "creatives")
+MINIO_PUBLIC_URL = os.getenv("MINIO_PUBLIC_URL", "http://localhost:9002/creatives")
+BRAIN_URL = os.getenv("BRAIN_URL", "http://localhost:8001")
+CLICKHOUSE_HOST = os.getenv("CLICKHOUSE_HOST", "localhost")
+CLICKHOUSE_HTTP_PORT = int(os.getenv("CLICKHOUSE_HTTP_PORT", "8123"))
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+LANGGRAPH_MODEL = os.getenv("LANGGRAPH_MODEL", "gpt-4o-mini")

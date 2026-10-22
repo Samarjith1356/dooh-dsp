@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+package dooh.ruleset.v1;
+
+option go_package = "github.com/dooh-dsp/ruleset;ruleset";
+
+message CreativeRef {
+  uint32 id = 1;
+  uint32 width = 2;
+  uint32 height = 3;
+  string mime = 4;
+  string cdn_url = 5;
+  uint32 duration_ms = 6;
+  string ssp_asset_id = 7;
+}
+
+message ShadingParams {
+  double min_cpm = 1;
+  double max_cpm = 2;
+  double shade_factor = 3;
+  double pwin_bin = 4;
+}
+
+message CompiledCampaign {
+  uint32 id = 1;
+  uint32 advertiser_id = 2;
+  string seat = 3;
+  uint32 priority = 4;
+  int64 bid_cpm_micros = 5;
+  ShadingParams shading = 6;
+  bytes daypart_bits = 7;
+  repeated uint64 h3_cells = 8;
+  double min_lat = 9;
+  double max_lat = 10;
+  double min_lon = 11;
+  double max_lon = 12;
+  repeated string venue_types = 13;
+  repeated CreativeRef creatives = 14;
+  string budget_token = 15;
+  string currency = 16;
+  repeated string deal_ids = 17;
+  repeated string countries = 18;
+}
+
+message IdList {
+  repeated uint32 ids = 1;
+}
+
+message RulesSnapshot {
+  uint64 snapshot_id = 1;
+  int64 compiled_at_unix = 2;
+  uint64 epoch = 3;
+  repeated CompiledCampaign campaigns = 4;
+  map<string, IdList> venue_index = 5;
+  map<uint64, IdList> h3_index = 6;
+  map<string, IdList> deal_index = 7;
+}
