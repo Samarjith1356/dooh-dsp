@@ -4,6 +4,7 @@ import "github.com/dooh-dsp/bidder/internal/openrtb"
 
 type CanonicalImp struct {
 	Req          *openrtb.BidRequest
+	ImpID        string
 	VenueTypes   []string
 	Lat          float64
 	Lon          float64

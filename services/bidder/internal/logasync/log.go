@@ -1,9 +1,9 @@
 package logasync
 
 import (
+	"bytes"
 	"encoding/json"
-	"net"
-	"os"
+	"net/http"
 	"strings"
 	"time"
 )
@@ -27,14 +27,23 @@ type Event struct {
 }
 
 type Writer struct {
-	ch      chan Event
-	brokers []string
+	ch     chan Event
+	ingest string
+	client *http.Client
 }
 
-func New(brokers string) *Writer {
+func New(ingest string) *Writer {
 	w := &Writer{
-		ch:      make(chan Event, 4096),
-		brokers: strings.Split(brokers, ","),
+		ch:     make(chan Event, 8192),
+		ingest: strings.TrimSpace(ingest),
+		client: &http.Client{
+			Timeout: 400 * time.Millisecond,
+			Transport: &http.Transport{
+				MaxIdleConns:        32,
+				MaxIdleConnsPerHost: 32,
+				IdleConnTimeout:     30 * time.Second,
+			},
+		},
 	}
 	go w.loop()
 	return w
@@ -51,22 +60,23 @@ func (w *Writer) Log(e Event) {
 }
 
 func (w *Writer) loop() {
-	topic := "rtb.bid_log"
 	for e := range w.ch {
-		payload, _ := json.Marshal(e)
-		if err := produce(w.brokers[0], topic, payload); err != nil {
-			os.Stderr.WriteString("kafka log skip: " + err.Error() + "\n")
+		if w.ingest == "" {
+			continue
 		}
+		payload, err := json.Marshal(e)
+		if err != nil {
+			continue
+		}
+		req, err := http.NewRequest(http.MethodPost, w.ingest, bytes.NewReader(payload))
+		if err != nil {
+			continue
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := w.client.Do(req)
+		if err != nil {
+			continue
+		}
+		resp.Body.Close()
 	}
-}
-
-func produce(broker, topic string, value []byte) error {
-	conn, err := net.DialTimeout("tcp", strings.TrimSpace(broker), 200*time.Millisecond)
-	if err != nil {
-		return err
-	}
-	conn.Close()
-	_ = topic
-	_ = value
-	return nil
 }

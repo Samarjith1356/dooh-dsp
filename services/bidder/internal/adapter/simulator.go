@@ -19,6 +19,7 @@ func (SimulatorAdapter) Normalize(req *openrtb.BidRequest) CanonicalImp {
 	out.Lat = req.Device.Geo.Lat
 	out.Lon = req.Device.Geo.Lon
 	if len(req.Imp) > 0 {
+		out.ImpID = req.Imp[0].ID
 		out.W, out.H = sizeOf(req.Imp[0])
 		out.Floor = req.Imp[0].BidFloor
 		out.Qty = qtyOf(req.Imp[0])

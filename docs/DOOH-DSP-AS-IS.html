@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>DOOH DSP — As-Is Product Specification</title>
+<style>
+  body { font: 16px/1.55 Georgia, "Times New Roman", serif; color: #111827; background: #fafafa; margin: 0; }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 40px 28px 80px; background: #fff; box-shadow: 0 0 0 1px #e5e7eb; }
+  h1 { font-size: 2rem; margin: 0 0 0.6em; }
+  h2 { font-size: 1.35rem; margin-top: 2em; border-bottom: 1px solid #e5e7eb; padding-bottom: .25em; }
+  h3 { font-size: 1.1rem; margin-top: 1.4em; }
+  code { font-family: Consolas, "Courier New", monospace; font-size: 0.88em; background: #f3f4f6; padding: 0.05em 0.35em; border-radius: 4px; }
+  pre { background: #111827; color: #f9fafb; padding: 14px 16px; overflow: auto; border-radius: 8px; }
+  pre code { background: none; color: inherit; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: 0.92em; }
+  th, td { border: 1px solid #e5e7eb; padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: #f3f4f6; }
+  hr { border: none; border-top: 1px solid #e5e7eb; margin: 2em 0; }
+  a { color: #1d4ed8; }
+  .bar { display:flex; gap:12px; flex-wrap:wrap; margin: 0 0 24px; font-family: system-ui, sans-serif; font-size: 14px; }
+  .bar a { display:inline-block; padding: 8px 12px; background:#111827; color:#fff; text-decoration:none; border-radius:6px; }
+  @media print { .bar { display:none; } body { background:#fff; } .wrap { box-shadow:none; padding: 0; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="bar">
+  <a href="DOOH-DSP-AS-IS.md" download="DOOH-DSP-AS-IS.md">Download Markdown</a>
+  <a href="#" onclick="window.print(); return false;">Print / Save as PDF</a>
+</div>
+<h1>DOOH DSP — As-Is Product Specification</h1>
+<p><strong>Product:</strong> Programmatic demand-side platform for Digital Out-of-Home (DOOH) in Great Britain and Ireland, shaped after JCDecaux / VIOOH OpenRTB 2.6.</p>
+<p><strong>Repository:</strong> <a href="https://github.com/Samarjith1356/dooh-dsp">https://github.com/Samarjith1356/dooh-dsp</a>  </p>
+<p><strong>Default branch:</strong> <code>main</code>  </p>
+<p><strong>Document date:</strong> 26 October 2026  </p>
+<p><strong>This document describes the working tree as it exists on the developer machine, and separately what is already pushed to GitHub.</strong></p>
+<hr/>
+<h2>1. Two source-of-truth states</h2>
+<p>GitHub <code>origin/main</code> is <strong>behind</strong> the local workspace. Anything used in recent E2E / UI / sub-1ms bidding work that is not listed in §1.2 is <strong>not on Git</strong> until it is committed and pushed.</p>
+<h3>1.1 On GitHub (<code>origin/main</code> = <code>90fe53b</code>)</h3>
+<p>Three commits, all on <code>main</code>:</p>
+<table><thead><tr><th>SHA</th><th>Date</th><th>Message</th></tr></thead><tbody><tr><td><code>cf452e3</code></td><td>22 Oct 2026 21:41 +0100</td><td>Add the UK/Ireland DOOH DSP MVP with an offline rules compiler and a Go OpenRTB bidder.</td></tr><tr><td><code>68bc9c2</code></td><td>22 Oct 2026 21:56 +0100</td><td>Serve creatives from local disk so Compose can start without MinIO.</td></tr><tr><td><code>90fe53b</code></td><td>22 Oct 2026 22:16 +0100</td><td>Pin TypeScript 5 so the Next.js Docker image can build.</td></tr></tbody></table>
+<p>Pushed stack: four-layer MVP, Compose, Postgres+pgvector, Redis, Redpanda, ClickHouse, campaign-api, Brain, Go bidder, SSP simulator, ingest, Next.js portal (single page), ruleset proto/JSON, local-disk creatives, TypeScript 5 pin.</p>
+<h3>1.2 Local working tree, not on Git</h3>
+<p>These files exist in the workspace and are what a local <code>docker compose up --build</code> actually runs if the images are rebuilt from this tree:</p>
+<ul>
+<li><strong>Enterprise console:</strong> App Router under <code>apps/web/app/(console)/</code> (Command Center, Inventory, Agent Studio, Ledger), Tailwind, shadcn-style UI, TanStack Query, Leaflet map, Recharts, client-side RBAC.</li>
+<li><strong>Campaign API ops/analytics extras:</strong> <code>services/campaign-api/app/ops.py</code>; fleet health; KPIs; recent events; list plans.</li>
+<li><strong>Brain:</strong> ruleset path walk so compile works inside the container; CORS <code>*</code>.</li>
+<li><strong>Bidder hot path:</strong> fast OpenRTB scan, compact JSON marshal, cached Europe/London TZ, async ingest-only logging, <code>X-DSP-Decision-Us</code>, <code>/health</code> latency stats. Proven live ~50µs average, max well under 1ms after warmup.</li>
+<li><strong>ClickHouse:</strong> <code>infra/clickhouse/users.d/default-network.xml</code> allows <code>default</code> from <code>::/0</code> (dev Docker only; required so ingest is not HTTP 403).</li>
+<li><strong>Compose:</strong> campaign-api <code>BRAIN_URL</code> / <code>BIDDER_URL</code> / <code>INGEST_URL</code>; ClickHouse users.d mount.</li>
+</ul>
+<p><code>infra/_bad.png</code> and <code>infra/_ok.png</code> are leftover local screenshots, not product.</p>
+<hr/>
+<h2>2. What this product is</h2>
+<p>A UK/Ireland DOOH DSP with a hard split:</p>
+<table><thead><tr><th>Layer</th><th>Name</th><th>Job</th></tr></thead><tbody><tr><td>1</td><td>Portal + Campaign API + Agent</td><td>Humans and LLM plan campaigns <strong>offline</strong></td></tr><tr><td>2</td><td>Brain</td><td>Deterministic compiler: Postgres campaign/plan → Redis <code>RulesSnapshot</code> + budget keys</td></tr><tr><td>3</td><td>Go bidder</td><td>OpenRTB 2.6 DOOH bid/no-bid from <strong>in-memory snapshot only</strong></td></tr><tr><td>4</td><td>Ingest + ClickHouse</td><td>Async logs, hourly rollups, dashboard and agent insights</td></tr></tbody></table>
+<p><strong>Golden rule (enforced by architecture, not by a runtime guard):</strong> the bid path is HTTP parse → in-memory match → bid/no-bid → non-blocking log. Never on that path: LLM / LangGraph, Postgres, ClickHouse, object storage, or Brain compile.</p>
+<p>Currency is <strong>GBP</strong>. Prices and caps are stored as <strong>integer micros</strong> (1 GBP = 1_000_000 micros). Billable impressions use OpenRTB 2.6 <code>imp.qty.multiplier</code>.</p>
+<p>Live VIOOH/JCDecaux exchange is <strong>not connected</strong>. The matcher is adapter-agnostic; <code>SSP_ADAPTER=simulator</code> (default) or <code>viooh</code> (stub: auth env + <code>dooh.ext</code> field names).</p>
+<hr/>
+<h2>3. How to run (as-is)</h2>
+<p>From <code>infra/</code>:</p>
+<pre><code>docker compose up --build</code></pre>
+<table><thead><tr><th>Surface</th><th>URL</th></tr></thead><tbody><tr><td>Web console</td><td>http://localhost:3000</td></tr><tr><td>Campaign API</td><td>http://localhost:8000 (<code>/docs</code>, <code>/health</code>)</td></tr><tr><td>Brain</td><td>http://localhost:8001 (<code>/health</code>, <code>POST /compile</code>)</td></tr><tr><td>Bidder</td><td>http://localhost:8081 (<code>/health</code>, <code>POST /openrtb/v2/bid</code>)</td></tr><tr><td>Ingest</td><td>http://localhost:8090 (<code>/health</code>, <code>POST /events</code>)</td></tr><tr><td>ClickHouse HTTP</td><td>http://localhost:8123</td></tr><tr><td>Postgres</td><td>localhost:5432 (<code>dooh</code> / <code>dooh</code> / <code>dooh_dsp</code>)</td></tr><tr><td>Redis</td><td>localhost:6379</td></tr><tr><td>Redpanda Kafka</td><td>localhost:19092</td></tr></tbody></table>
+<p>Optional: set <code>OPENAI_API_KEY</code> (and <code>LANGGRAPH_MODEL</code>, default <code>gpt-4o-mini</code>) if the LangGraph confirmation node should run. Without a key, the agent is <strong>heuristic-only</strong>.</p>
+<p>Simulator QPS is <strong>50</strong> in Compose. It will consume the seeded campaign total cap (50e6 micros ≈ £50) quickly, after which the bidder correctly no-bids (<code>nbr: 2</code>) until Brain rewrites remaining budget.</p>
+<hr/>
+<h2>4. Runtime topology</h2>
+<p>Compose services (<code>infra/docker-compose.yml</code>):</p>
+<pre><code>browser → web:3000
+              ↓ NEXT_PUBLIC_API_URL
+         campaign-api:8000 ──Postgres── Redis ── Redpanda
+              │                 ▲
+              │ POST /compile   │ rules:snapshot:*  budget:*:remaining_micros
+              ▼                 │
+           brain:8001 ──────────┘
+              │ ClickHouse spend (pacing)
+              ▼
+           bidder:8081 ← ssp-simulator (50 QPS OpenRTB DOOH)
+              │ async HTTP POST /events
+              ▼
+           ingest:8090 → ClickHouse rtb.events → MV rtb.campaign_hourly</code></pre>
+<p>Volumes: <code>postgres_data</code>, <code>clickhouse_data</code>, <code>creative_data</code> (<code>/data/creatives</code> on campaign-api).</p>
+<p>MinIO is <strong>not</strong> in Compose. Creatives are files on disk, served at <code>http://localhost:8000/creatives/...</code>.</p>
+<hr/>
+<h2>5. Data stores (as built)</h2>
+<h3>5.1 Postgres 16 + pgvector (<code>dooh_dsp</code>)</h3>
+<p>Created on API startup via SQLAlchemy <code>init_db()</code> (no Alembic migrations). Tables:</p>
+<table><thead><tr><th>Table</th><th>Purpose</th></tr></thead><tbody><tr><td><code>advertisers</code></td><td>Company, brand guidelines JSON, markets, ASA notes</td></tr><tr><td><code>users</code></td><td>Email, name, empty <code>password_hash</code> (no login)</td></tr><tr><td><code>seats</code></td><td>OpenRTB seat id per advertiser</td></tr><tr><td><code>screen_specs</code></td><td>JCDecaux/VIOOH-shaped format catalog</td></tr><tr><td><code>creatives</code></td><td>Asset URI, mime, WxH, validation status/errors, optional <code>ssp_asset_id</code></td></tr><tr><td><code>geofences</code></td><td>Named bbox + geojson + H3 cell list</td></tr><tr><td><code>campaigns</code></td><td>State, flight, daily/total caps, currency, priority, bid CPM micros, creative_ids, geofence_ids</td></tr><tr><td><code>campaign_plans</code></td><td>Dayparts, venue allowlist, countries, geofences, bid, shade, goal, approved</td></tr><tr><td><code>agent_threads</code></td><td>JSON messages (schema exists; chat does not persist threads)</td></tr><tr><td><code>agent_memories</code></td><td>Text + <code>Vector(1536)</code> (schema exists; unused)</td></tr><tr><td><code>insights</code></td><td>Markdown insights (schema exists; list endpoint returns live CH summary + stored rows, none seeded)</td></tr></tbody></table>
+<h3>5.2 Redis 7</h3>
+<table><thead><tr><th>Key</th><th>Writer</th><th>Reader</th></tr></thead><tbody><tr><td><code>rules:current</code></td><td>Brain</td><td>Bidder poll (500ms)</td></tr><tr><td><code>rules:snapshot:{id}</code></td><td>Brain (JSON blob)</td><td>Bidder</td></tr><tr><td><code>rules.invalidate</code> pubsub</td><td>Brain</td><td>Unused by bidder (poll only)</td></tr><tr><td><code>budget:{campaign_id}:remaining_micros</code></td><td>Brain pacing</td><td>Bidder refresh loop 250ms</td></tr></tbody></table>
+<h3>5.3 Redpanda (Kafka API)</h3>
+<p>Topics used in code (created implicitly if the producer connects):</p>
+<table><thead><tr><th>Topic</th><th>Producer</th><th>Consumer</th><th>As-is status</th></tr></thead><tbody><tr><td><code>campaign.plan.updated</code></td><td>campaign-api <code>bus.py</code></td><td>Brain kafka loop</td><td>HTTP <code>POST /compile</code> nudge is the reliable path</td></tr><tr><td><code>pacing.spend.tick</code></td><td>(declared)</td><td>Brain</td><td>No producer in-tree</td></tr><tr><td><code>rules.compiled</code> / <code>rules.invalidate</code></td><td>Brain store</td><td>none</td><td>Best-effort</td></tr><tr><td><code>rtb.bid_log</code></td><td>ingest kafka loop expected</td><td>ingest</td><td>Bidder <strong>does not produce</strong> Kafka; HTTP ingest is the working log path</td></tr></tbody></table>
+<h3>5.4 ClickHouse 24.8 database <code>rtb</code></h3>
+<p><code>infra/clickhouse/init.sql</code>:</p>
+<ul>
+<li><code>rtb.events</code> MergeTree, partition <code>toYYYYMM(event_date)</code>, ORDER BY advertiser/campaign/type/time, <strong>TTL 13 months</strong>.</li>
+<li><code>rtb.campaign_hourly</code> AggregatingMergeTree.</li>
+<li><code>rtb.mv_campaign_hourly</code> MV: count bids, sum billable imps, sum spend micros, avg CPM.</li>
+<li><code>rtb.campaign_dim</code> ReplacingMergeTree (created, unused by app code).</li>
+</ul>
+<p>Dev network ACL: <code>users.d/default-network.xml</code> sets default user <code>ip ::/0</code>. Without this, Docker ingest gets HTTP 403 (<code>HOST LOCAL</code> default). <strong>Not a production setting.</strong></p>
+<p>Event fields: <code>event_type</code> (<code>bid</code> / <code>nobid</code> / <code>win</code> / <code>pop</code>), SSP, country, venue, coarse grid <code>h3</code> (not true H3 from the bidder — see gaps), creative, bid request id, <code>price_cpm</code>, <code>qty_multiplier</code>, <code>billable_imps</code>, <code>spend_micros</code>, <code>snapshot_id</code>.</p>
+<hr/>
+<h2>6. Shared contracts</h2>
+<h3>6.1 Rules snapshot (<code>packages/ruleset</code>)</h3>
+<ul>
+<li><code>ruleset.proto</code> is the documented contract (<code>dooh.ruleset.v1</code>).</li>
+<li>Runtime encoding is <strong>JSON</strong>, not protobuf. Python dataclass <code>packages/ruleset/python/ruleset.py</code>; Go struct <code>services/bidder/internal/snapshot</code>.</li>
+</ul>
+<p>Compiled campaign fields: id, advertiser, seat, priority, bid_cpm_micros, shading (min/max CPM, shade_factor, pwin_bin), daypart_bits (base64 of <strong>21 bytes = 168 bits</strong>, Mon–Sun×24 encoded as <code>dow*24+hour</code>), h3_cells, bbox, venue_types, creatives (WxH, mime, cdn_url, ssp_asset_id), budget_token, currency, deal_ids, countries.</p>
+<p>Indexes <code>venue_index</code>, <code>h3_index</code>, <code>deal_index</code> are written by Brain. The Go matcher currently <strong>scans campaigns linearly</strong> and uses bbox + venue prefix + country + daypart + budget + creative size; it does not require those indexes for correctness.</p>
+<h3>6.2 OpenRTB (<code>packages/openrtb/openrtb.py</code>)</h3>
+<p>Python helper: a request is DOOH iff <code>dooh</code> is present and <code>site</code>/<code>app</code> are absent. Go bidder enforces the same (<code>openrtb.IsDOOH</code>).</p>
+<hr/>
+<h2>7. Layer 1 — Campaign API</h2>
+<p><strong>Service:</strong> FastAPI <code>DOOH Campaign API</code> 0.1.0, <code>services/campaign-api</code>, port 8000.  </p>
+<p>CORS <code>*</code>. Startup: create creative dir, mount <code>/creatives</code>, <code>init_db()</code>, <code>bootstrap.seed()</code>.</p>
+<h3>7.1 HTTP operations</h3>
+<table><thead><tr><th>Method</th><th>Path</th><th>Behaviour</th></tr></thead><tbody><tr><td>GET</td><td><code>/health</code></td><td><code>{&quot;ok&quot;: true}</code></td></tr><tr><td>GET</td><td><code>/v1/ops/health</code></td><td>Pings Brain, bidder, ingest <code>/health</code> (local tree)</td></tr><tr><td>POST</td><td><code>/v1/advertisers</code></td><td>Create advertiser + user + seat <code>seat-{id}</code></td></tr><tr><td>GET</td><td><code>/v1/advertisers</code></td><td>List id, company, markets, asa_notes</td></tr><tr><td>GET</td><td><code>/v1/screen-specs</code></td><td>Seeded JCDecaux/VIOOH catalog</td></tr><tr><td>GET</td><td><code>/v1/geofences?advertiser_id=</code></td><td>Bboxes + H3 lists</td></tr><tr><td>POST</td><td><code>/v1/creatives</code></td><td>multipart: advertiser_id, spec_id, duration_ms, file. Validate vs spec; store on disk if valid</td></tr><tr><td>GET</td><td><code>/v1/creatives?advertiser_id=</code></td><td>List</td></tr><tr><td>POST</td><td><code>/v1/campaigns</code></td><td>Create in <code>draft</code></td></tr><tr><td>GET</td><td><code>/v1/campaigns?advertiser_id=</code></td><td>List newest first</td></tr><tr><td>POST</td><td><code>/v1/campaigns/{id}/state</code></td><td>State machine. On <code>active</code>, copy latest plan bid/geofences and mark plan approved. Publishes <code>campaign.plan.updated</code> for active/paused/completed</td></tr><tr><td>POST</td><td><code>/v1/campaigns/{id}/plans</code></td><td>Insert plan; if <code>approved</code> and campaign draft → <code>pending_approval</code>; Kafka+Brain nudge if approved</td></tr><tr><td>GET</td><td><code>/v1/campaigns/{id}/plans</code></td><td>Last 20 plans (local tree)</td></tr><tr><td>POST</td><td><code>/v1/plans/{id}/approve</code></td><td>Mark approved, copy bid/geofences onto campaign, compile nudge</td></tr><tr><td>POST</td><td><code>/v1/agent/chat</code></td><td>Agent (see §8)</td></tr><tr><td>GET</td><td><code>/v1/analytics/hourly</code></td><td>ClickHouse hourly MV</td></tr><tr><td>GET</td><td><code>/v1/analytics/kpis</code></td><td>Aggregated bids, billable imps, spend, avg CPM, GB/IE sample imps (local tree)</td></tr><tr><td>GET</td><td><code>/v1/analytics/events</code></td><td>Recent <code>rtb.events</code> (local tree)</td></tr><tr><td>GET</td><td><code>/v1/insights</code></td><td>Live CH prose summary + stored Insight rows</td></tr></tbody></table>
+<p>There is <strong>no authentication</strong>. Any caller can read/write all advertisers.</p>
+<h3>7.2 Campaign state machine</h3>
+<p><code>services/campaign-api/app/state_machine.py</code></p>
+<pre><code>draft ──► pending_approval ──► active ──► paused ──► active
+  │              │                │          │
+  └── completed  ├── draft        └── completed
+                 └── paused                 └── draft
+completed is terminal.</code></pre>
+<p>Illegal example: <code>draft → active</code> (must go through pending_approval). Brain compiles <strong>only <code>state == &quot;active&quot;</code></strong> campaigns that have at least one valid creative.</p>
+<h3>7.3 Creative validation</h3>
+<p><code>creative.validate_asset</code>:</p>
+<ul>
+<li>Size ≤ spec <code>max_bytes</code></li>
+<li>Images (jpg/png/webp): exact WxH, exact aspect via gcd, codec in spec list</li>
+<li>Video (mp4/mov): codec allowlist; duration vs <code>max_duration_ms</code> if provided (no ffprobe — duration is the form field)</li>
+<li>Other extensions rejected</li>
+</ul>
+<p>Valid files written to <code>{CREATIVE_DIR}/{advertiser_id}/{filename}</code> and URI <code>{CREATIVE_PUBLIC_URL}/{advertiser_id}/{filename}</code>.</p>
+<h3>7.4 Event bus</h3>
+<p><code>bus.publish(topic, payload)</code>: Kafka if available, always HTTP <code>POST {BRAIN_URL}/compile</code> when topic is <code>campaign.plan.updated</code>.</p>
+<hr/>
+<h2>8. Agent (offline planner)</h2>
+<p><strong>Code:</strong> <code>services/campaign-api/app/agent.py</code>  </p>
+<p><strong>Entry:</strong> <code>POST /v1/agent/chat</code> <code>{ advertiser_id, campaign_id, message }</code>  </p>
+<p><strong>UI:</strong> Agent Studio (<code>/studio</code>)</p>
+<p>The agent <strong>never</strong> sits on the bid path. It only writes <code>campaign_plans</code> (unapproved) and may move <code>draft → pending_approval</code>.</p>
+<h3>8.1 Intents</h3>
+<table><thead><tr><th>User message</th><th>Behaviour</th></tr></thead><tbody><tr><td>Starts with <code>performance</code> or contains <code>how is</code></td><td>ClickHouse hourly summary string; no plan</td></tr><tr><td>Starts with <code>catalog</code></td><td>Screen spec count + catalog payload; no plan</td></tr><tr><td>Anything else</td><td>Heuristic plan (+ optional LangGraph confirmation)</td></tr></tbody></table>
+<h3>8.2 Heuristic planner (<code>heuristic_plan</code>)</h3>
+<p>Keyword extraction from the free-text goal:</p>
+<table><thead><tr><th>Signal in text</th><th>Plan effect</th></tr></thead><tbody><tr><td>dublin / ireland</td><td>country <code>IE</code></td></tr><tr><td>london / uk / britain</td><td>country <code>GB</code></td></tr><tr><td>else</td><td><code>GB</code> and <code>IE</code></td></tr><tr><td>commut / transit / underground / rail</td><td>venues <code>transit.rail</code>, <code>transit.rail.underground</code>, <code>transit.bus</code>; weekday (dow 0–4) hours 7–9 and 17–19</td></tr><tr><td>road / billboard</td><td><code>roadside</code>, <code>roadside.billboard</code></td></tr><tr><td>else</td><td>roadside + transit.rail + urban.street; hours 6–22 all 7 days</td></tr><tr><td><code>N-week</code> / <code>N week</code></td><td>flight length N weeks (default 2)</td></tr><tr><td>Geofence names containing Dublin/London</td><td>those fence IDs; else all advertiser fences</td></tr></tbody></table>
+<p>Fixed commercial knobs: <code>bid_cpm_micros = 6_500_000</code> (£6.50), <code>shade_factor = 0.85</code>.</p>
+<p>ASA/CAP lexical flags if the goal contains <code>guarantee</code>, <code>miracle</code>, <code>cure</code>, <code>best in the world</code>.</p>
+<p>If <code>campaign_id</code> is set and belongs to the advertiser, the plan is <strong>persisted</strong> and draft campaigns move to <code>pending_approval</code>.</p>
+<h3>8.3 LangGraph (optional)</h3>
+<p>If <code>OPENAI_API_KEY</code> is set, a three-node graph runs: <code>intake → compliance → propose</code>. Propose calls <code>ChatOpenAI</code> (<code>gpt-4o-mini</code> by default) with a short “is this UK/IE plan sensible?” prompt. The <strong>numeric plan is still the heuristic seed</strong>; the LLM does not rewrite venues/geos/CPM. Failures are swallowed and the heuristic plan is used.</p>
+<p><code>AgentThread</code> / <code>AgentMemory</code> / pgvector embeddings are <strong>not wired</strong> into <code>run_agent</code>.</p>
+<h3>8.4 Approval → compile</h3>
+<p>Studio “sign off” calls <code>POST /v1/plans/{id}/approve</code> then <code>POST http://localhost:8001/compile</code>. Activating a campaign from Command Center also nudges Brain via Kafka/HTTP.</p>
+<hr/>
+<h2>9. Layer 2 — Brain (compiler)</h2>
+<p><strong>Service:</strong> FastAPI <code>DOOH Brain</code> 0.1.0, port 8001.</p>
+<table><thead><tr><th>Method</th><th>Path</th></tr></thead><tbody><tr><td>GET</td><td><code>/health</code></td></tr><tr><td>POST</td><td><code>/compile</code></td><td>Load active campaigns, compile, write Redis budgets, publish snapshot</td></tr><tr><td>GET</td><td><code>/snapshot/{id}</code></td><td>Current Redis snapshot JSON (returns current even if id mismatches)</td></tr></tbody></table>
+<p>Background:</p>
+<ul>
+<li>Kafka consumer <code>campaign.plan.updated</code> + <code>pacing.spend.tick</code> → <code>compile_now()</code></li>
+<li>Every <strong>15s</strong> pacing recompile (ClickHouse spend → Redis remaining)</li>
+</ul>
+<p><code>loader.load_active_campaigns</code>: <code>campaigns.state == &#x27;active&#x27;</code>, latest <strong>approved</strong> plan, union of geofence bboxes/H3, only <code>validation_status == valid</code> creatives. Skip campaign if no valid creative.</p>
+<p><code>compiler.compile_snapshot</code>:</p>
+<ul>
+<li>Overlap rank: sort by <code>(-priority, id)</code>; compiled <code>priority</code> field becomes <code>1000 - rank</code></li>
+<li>Dayparts → 168-bit mask (empty dayparts = <strong>all hours allowed</strong>)</li>
+<li>Shading min CPM = 40% of bid CPM, max = bid CPM, factor from plan, <code>pwin_bin = 0.45</code></li>
+<li>Venue / H3 / deal inverted indexes</li>
+</ul>
+<p><code>pacing.write_budgets</code>: <code>remaining = max(0, total_cap_micros - ClickHouse sumMerge(spend_micros))</code>. Seeded demo cap is 50_000_000 micros.</p>
+<p>Redis publish: <code>rules:snapshot:{id}</code>, <code>rules:current</code>, pubsub <code>rules.invalidate</code>.</p>
+<hr/>
+<h2>10. Layer 3 — Go bidder</h2>
+<p><strong>Module:</strong> <code>github.com/dooh-dsp/bidder</code> (Go 1.23, stdlib only).  </p>
+<p><strong>Listen:</strong> <code>:8081</code>. <strong>Adapter:</strong> <code>SSP_ADAPTER</code> <code>simulator</code> | <code>viooh</code>.</p>
+<h3>10.1 HTTP</h3>
+<table><thead><tr><th>Method</th><th>Path</th><th>Behaviour</th></tr></thead><tbody><tr><td>GET</td><td><code>/health</code></td><td><code>ok</code>, adapter name; local tree also <code>bids</code>, <code>avg_decision_us</code>, <code>max_decision_us</code>, <code>last_decision_us</code></td></tr><tr><td>POST</td><td><code>/openrtb/v2/bid</code></td><td>Bid or no-bid JSON. Header <code>X-DSP-Decision-Us</code> (local tree)</td></tr><tr><td>GET</td><td><code>/nurl</code></td><td>Win notice → async log <code>win</code></td></tr><tr><td>GET</td><td><code>/burl</code></td><td>Billing/pop notice → async log <code>pop</code></td></tr></tbody></table>
+<h3>10.2 Bid path (local tree)</h3>
+<ol>
+<li>Read body (1 MiB cap), pooled buffers.</li>
+<li>Fast OpenRTB scan (<code>internal/openrtb/fast.go</code>); fallback <code>encoding/json</code>.</li>
+<li>Reject if not exclusive DOOH (<code>nbr: 2</code>).</li>
+<li>Adapter <code>Normalize</code> → canonical impression (venues, lat/lon, country, WxH, floor, qty, dooh id).</li>
+<li><code>matcher.Match</code> against atomic snapshot + in-memory budget cache.</li>
+<li>Compact JSON response (<code>matcher.AppendResponse</code>).</li>
+<li><code>logasync.Log</code> onto a buffered channel; <strong>one</strong> background loop POSTs to ingest. No per-request goroutine, no Kafka dial on the hot path.</li>
+</ol>
+<p>Timezone for daypart: <code>Europe/London</code> (tzdata in Docker image).</p>
+<h3>10.3 Match rules (in order, all must pass)</h3>
+<ol>
+<li>Snapshot present with campaigns</li>
+<li>Country alias: GBR/UK → GB, IRL → IE</li>
+<li>Point-in-bbox (campaign min/max lat/lon)</li>
+<li>Venue: impression venue equals a campaign venue, <strong>or</strong> a dotted prefix of the impression venue is in the campaign set (e.g. campaign <code>roadside</code> matches <code>roadside.billboard</code>; campaign <code>transit.rail</code> does <strong>not</strong> match <code>transit.bus</code>)</li>
+<li>Country allowlist if non-empty</li>
+<li>Daypart bit for <code>weekday*24+hour</code> in London time (empty bits = allow)</li>
+<li>In-memory remaining micros &gt; 0</li>
+<li>Creative exact WxH (or first creative if W=H=0)</li>
+<li>Among survivors, highest <code>shadedCPM + priority</code></li>
+<li>Price = max(precomputed shaded CPM, bid floor)</li>
+<li><code>spend_micros = price * 1e6 * qty / 1000</code> (CPM × qty)</li>
+</ol>
+<p>Shaded CPM is precomputed at snapshot load: <code>bid_cpm_micros/1e6 * shade_factor</code>, clamped to min/max CPM (default factor 0.85).</p>
+<p>No-bid OpenRTB <code>nbr</code> is <strong>2</strong> (technical / invalid / no match). Site/app requests no-bid.</p>
+<h3>10.4 Snapshot poll and budget</h3>
+<ul>
+<li>Redis <code>GET rules:current</code> every 500ms; on change load <code>rules:snapshot:{id}</code> and <code>prepare()</code> (sets, shade, creative-by-size).</li>
+<li>Budget cache refresh every 250ms from <code>budget:{id}:remaining_micros</code>. Until Redis has values, <code>Ensure</code> seeds 50e6 micros so first bids are not all no-bid.</li>
+</ul>
+<h3>10.5 Adapters</h3>
+<p><strong>Simulator:</strong> maps <code>dooh.venuetype</code>, geo, first imp banner/video size, <code>qty.multiplier</code> default 1.</p>
+<p><strong>VIOOH stub:</strong> same plus optional <code>dooh.ext.screenid</code> / <code>venuetype</code>; AuthConfig mtls + <code>VIOOH_API_TOKEN</code> / TLS files from env. <strong>No live HTTP to VIOOH.</strong> Creative IDs prefixed <code>viooh-</code> unless <code>ssp_asset_id</code> set.</p>
+<h3>10.6 Latency (measured on local Compose)</h3>
+<p>After warmup with simulator traffic: <strong>~50µs average decision</strong>, last ~40µs, max hundreds of µs (under 1ms). This is parse+match+marshal, not laptop-to-Docker RTT.</p>
+<hr/>
+<h2>11. Layer 4 — Ingest</h2>
+<p>FastAPI port 8090.</p>
+<table><thead><tr><th>Method</th><th>Path</th></tr></thead><tbody><tr><td>POST</td><td><code>/events</code></td><td>Single event enqueue</td></tr><tr><td>POST</td><td><code>/events/batch</code></td><td>List enqueue</td></tr><tr><td>GET</td><td><code>/health</code></td><td><code>ok</code>, <code>buffered</code></td></tr></tbody></table>
+<p>Buffer flush every 2s or at 1000 rows. Insert <code>rtb.events</code> JSONEachRow with <code>async_insert=1</code>. Kafka consumer <code>rtb.bid_log</code> is started but idle unless something produces that topic.</p>
+<hr/>
+<h2>12. SSP simulator</h2>
+<p>Go process, 50 QPS in Compose, POST to <code>http://bidder:8081/openrtb/v2/bid</code>.</p>
+<p>Four screens:</p>
+<table><thead><tr><th>ID</th><th>Name</th><th>Venues</th><th>Geo</th><th>Size</th><th>Floor</th><th>Qty</th></tr></thead><tbody><tr><td>jcd-lu-001</td><td>London Underground Oxford Circus</td><td>transit.rail.underground, transit.rail</td><td>51.5154, -0.1419 GB</td><td>1080×1920</td><td>3.2</td><td>18.4</td></tr><tr><td>jcd-rd-001</td><td>London roadside A4 Cromwell</td><td>roadside.billboard, roadside</td><td>51.495, -0.183 GB</td><td>1920×1080</td><td>4.1</td><td>22.0</td></tr><tr><td>jcd-dub-001</td><td>Dublin O&#x27;Connell Street</td><td>roadside, urban.street</td><td>53.3498, -6.2603 IE</td><td>1920×1080</td><td>2.8</td><td>11.5</td></tr><tr><td>jcd-dub-002</td><td>Dublin Bus Connects</td><td>transit.bus, transit.rail</td><td>53.347, -6.259 IE</td><td>1080×1920</td><td>2.1</td><td>9.0</td></tr></tbody></table>
+<p>Requests set <code>tmax: 100</code>, <code>cur: GBP</code>, <code>test: 1</code>, <code>qty.sourcetype: 1</code>, vendor <code>viooh.com</code>. No <code>site</code>/<code>app</code>.</p>
+<hr/>
+<h2>13. Web console (local tree)</h2>
+<p><strong>App:</strong> Next.js 15.1.3, React 19, Tailwind 3, TanStack Query 5, Leaflet, Recharts, lucide, sonner. Docker <code>output: &quot;standalone&quot;</code>. TypeScript <strong>5.7.2</strong>.</p>
+<p><strong>GitHub <code>main</code> still has</strong> the original single <code>apps/web/app/page.tsx</code> onboarding/chat page. <strong>Working tree deletes that</strong> and uses route group <code>(console)</code>.</p>
+<h3>13.1 Shell</h3>
+<ul>
+<li>Sidebar: Command Center <code>/</code>, Inventory <code>/inventory</code>, Agent Studio <code>/studio</code>, Ledger <code>/analytics</code></li>
+<li>Header: advertiser select, region ALL/GB/IE, role select, theme toggle</li>
+<li>Env: <code>NEXT_PUBLIC_API_URL=http://localhost:8000</code>, <code>NEXT_PUBLIC_BRAIN_URL=http://localhost:8001</code></li>
+</ul>
+<h3>13.2 Client RBAC (not server auth)</h3>
+<table><thead><tr><th>Role</th><th>canWrite</th><th>canSeeOps</th></tr></thead><tbody><tr><td>org_admin</td><td>yes</td><td>yes</td></tr><tr><td>campaign_manager</td><td>yes</td><td>no</td></tr><tr><td>client_viewer</td><td>no</td><td>no</td></tr><tr><td>auditor</td><td>no</td><td>yes</td></tr></tbody></table>
+<p>Write actions (activate, chat, approve, compile) hide when <code>!canWrite</code>. Fleet health strip only if <code>canSeeOps</code>. Default role <code>org_admin</code>. Switching roles is a UI control only.</p>
+<h3>13.3 Pages</h3>
+<p><strong>Command Center:</strong> KPI strip (bids, billable imps, spend, CPM, GB/IE split), fleet health, campaign table with state badges, activate/pause (legal transitions), select campaign into workspace, Brain compile button for admin+ops.</p>
+<p><strong>Inventory:</strong> Leaflet map (Carto dark tiles) of London/Dublin geofence rectangles + spec list filterable by region/search. Not a live SSP inventory feed.</p>
+<p><strong>Agent Studio:</strong> campaign picker, chat, plan preview (markets, venues, dayparts, CPM, shade), approve → compile.</p>
+<p><strong>Ledger:</strong> Recharts spend/imps from hourly MV, live insight sentence, virtualized recent events table.</p>
+<h3>13.4 Workspace</h3>
+<p>Client state: <code>advertiserId</code> (defaults to first advertiser, typically seeded Demo Brand id=1), <code>campaignId</code>, region.</p>
+<hr/>
+<h2>14. Seeded demo data (API startup)</h2>
+<p>If empty:</p>
+<p><strong>Screen specs (6):</strong></p>
+<table><thead><tr><th>Publisher</th><th>format_code</th><th>Size</th><th>Country</th><th>Venues</th></tr></thead><tbody><tr><td>JCDecaux</td><td>LU_6SHEET</td><td>1080×1920</td><td>GB</td><td>underground / rail</td></tr><tr><td>JCDecaux</td><td>ROADSIDE_LANDSCAPE</td><td>1920×1080</td><td>GB</td><td>roadside</td></tr><tr><td>JCDecaux</td><td>LARGE_FORMAT</td><td>3840×2160</td><td>GB</td><td>roadside / mall</td></tr><tr><td>JCDecaux</td><td>DUBLIN_CITY_LANDSCAPE</td><td>1920×1080</td><td>IE</td><td>roadside / bus / street</td></tr><tr><td>VIOOH</td><td>PREMIUM_LANDSCAPE</td><td>1920×1080</td><td>GB</td><td>roadside / rail</td></tr><tr><td>VIOOH</td><td>DUBLIN_TRANSIT</td><td>1080×1920</td><td>IE</td><td>rail / bus</td></tr></tbody></table>
+<p><strong>Advertiser:</strong> Demo Brand, markets GB+IE, ASA note, user <code>demo@dooh.local</code>, seat <code>dooh-demo-seat</code>.</p>
+<p><strong>Geofences:</strong> London transport hubs bbox 51.28–51.70, -0.50–0.25; Dublin city center 53.25–53.45, -6.45–-6.05. Placeholder H3 integers (not generated from a live H3 library).</p>
+<p><strong>Creatives:</strong> 1920×1080 and 1080×1920 placeholder.png URIs (valid status, not uploaded files).</p>
+<p><strong>Campaign:</strong> “Demo UK/IE commute”, <strong>already <code>active</code></strong>, 2-week flight, daily cap 5e6 micros, total cap 50e6 micros, priority 200, £6.50 CPM, both creatives, both fences.</p>
+<p><strong>Plan:</strong> approved, empty dayparts (all hours), venues roadside + transit.rail + transit.bus + urban.street, GB+IE, shade 0.85.</p>
+<hr/>
+<h2>15. End-to-end operation (happy path)</h2>
+<ol>
+<li>Compose up; API seeds Demo Brand + active campaign; Brain compiles snapshot into Redis; bidder loads it.</li>
+<li>Simulator sends DOOH bid requests; bidder matches bbox/venue/country/size/budget; returns seatbid with <code>adm</code> = creative CDN URL, nurl/burl on bidder, <code>cid</code> campaign id.</li>
+<li>Bidder logs <code>bid</code> or <code>nobid</code> to ingest → ClickHouse. Spend accumulates; Brain every 15s sets remaining = cap − spend.</li>
+<li>When remaining hits 0, matcher no-bids. Pause/activate or raise cap + compile to resume.</li>
+<li>Operator uses Studio: “Run a 2-week brand awareness campaign targeting commuters in Dublin” → IE + transit venues + weekday commute hours + Dublin fence → pending_approval → approve → compile.</li>
+<li>Command Center / Ledger read KPIs and events from ClickHouse via campaign-api.</li>
+<li>Wrong-aspect creative upload returns <code>validation_status: rejected</code> and is not compiled onto the bid path.</li>
+<li>OpenRTB <code>site</code> request → <code>nbr: 2</code>.</li>
+</ol>
+<hr/>
+<h2>16. Tests in-tree</h2>
+<table><thead><tr><th>Suite</th><th>What</th></tr></thead><tbody><tr><td><code>services/campaign-api/tests/test_state_machine.py</code></td><td>Legal vs illegal transitions; only <code>active</code> compiles</td></tr><tr><td><code>services/campaign-api/tests/test_creative.py</code></td><td>Dimension/aspect reject</td></tr><tr><td><code>services/brain/tests/test_compiler.py</code></td><td>Snapshot compile</td></tr><tr><td><code>packages/ruleset/python/test_ruleset.py</code></td><td>JSON round-trip</td></tr><tr><td><code>services/bidder/internal/matcher/matcher_test.go</code></td><td>London roadside match; venue reject; marshal no-bid; Match bench (local)</td></tr><tr><td><code>services/bidder/internal/openrtb/fast_test.go</code></td><td>Fast parse of simulator JSON (local)</td></tr><tr><td><code>services/bidder/cmd/bidder/main_test.go</code></td><td>httptest decision &amp;lt; 1ms after warmup; site no-bid (local)</td></tr></tbody></table>
+<p>CI is <strong>not</strong> configured on GitHub (no Actions workflow in the tree).</p>
+<hr/>
+<h2>17. Explicitly not built / known gaps</h2>
+<ul>
+<li>Live VIOOH/JCDecaux mTLS bidding, deals, or asset registration</li>
+<li>User login, password hashing, API keys, org tenancy enforcement (RBAC is UI-only)</li>
+<li>Alembic/migrations; schema is <code>create_all</code> on boot</li>
+<li>True H3 library on the bid path (geofence stores placeholder uints; bidder <code>GridCell</code> is a lat/lon grid for logs only; matcher uses <strong>bbox</strong>, not H3 intersection)</li>
+<li>Daypart weekday convention: agent commute plan uses <code>dow</code> 0–4 as “weekdays”; Go <code>time.Weekday</code> has Sunday=0, so agent “weekday” bits do not line up with London Mon–Fri without a mapping</li>
+<li>Kafka bid log from bidder (HTTP ingest is the working path)</li>
+<li>MinIO / S3 creatives (removed so Compose can start)</li>
+<li><code>AgentThread</code> / <code>AgentMemory</code> / vector recall</li>
+<li>Writing <code>insights</code> rows (read path exists)</li>
+<li><code>campaign_dim</code> sync</li>
+<li>Production ClickHouse user/network lockdown</li>
+<li>Daily cap enforcement distinct from total remaining</li>
+<li>Bid shading using <code>pwin_bin</code> dynamically (factor is static from plan)</li>
+<li>Multi-imp / video-only matching beyond first imp WxH</li>
+<li>GitHub <code>main</code> does <strong>not</strong> include enterprise UI, ops endpoints, or sub-1ms bidder until those are committed</li>
+</ul>
+<hr/>
+<h2>18. Repository layout (working tree)</h2>
+<pre><code>apps/web/                    Next.js console
+packages/openrtb/            Python DOOH request helper
+packages/ruleset/            Proto + Python JSON snapshot
+services/campaign-api/       FastAPI layer 1 + agent
+services/brain/              Compiler + pacing
+services/bidder/             Go OpenRTB bidder
+services/ssp-simulator/      Synthetic UK/IE traffic
+services/ingest/             ClickHouse writer
+infra/docker-compose.yml     Full stack
+infra/clickhouse/            Schema + (local) users.d
+docs/AS-IS.md                This document</code></pre>
+<hr/>
+<h2>19. Git file inventory at <code>90fe53b</code></h2>
+<p>Committed paths (complete): <code>.env.example</code>, <code>.gitignore</code>, <code>README.md</code>, <code>apps/web/*</code> (Dockerfile, single <code>app/page.tsx</code>, Next config, package.json), <code>infra/docker-compose.yml</code>, <code>infra/clickhouse/init.sql</code>, <code>packages/**</code>, all four Python/Go services as listed in <code>git ls-tree -r HEAD</code> (72 files). See <code>git ls-tree -r --name-only origin/main</code> for the canonical GitHub list.</p>
+<hr/>
+<p>*End of as-is specification. Implementation after this date should be treated as delta unless Git <code>main</code> is updated.*</p>
+</div>
+</body>
+</html>

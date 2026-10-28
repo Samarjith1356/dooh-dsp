@@ -43,6 +43,8 @@ type Campaign struct {
 	VenueTypes    []string      `json:"venue_types"`
 	VenueSet      map[string]struct{} `json:"-"`
 	Creatives     []CreativeRef `json:"creatives"`
+	CreativeByWH  map[uint64]*CreativeRef `json:"-"`
+	ShadedCPM     float64       `json:"-"`
 	BudgetToken   string        `json:"budget_token"`
 	Currency      string        `json:"currency"`
 	DealIDs       []string      `json:"deal_ids"`
@@ -91,6 +93,22 @@ func prepare(s *RulesSnapshot) {
 		c.VenueSet = make(map[string]struct{}, len(c.VenueTypes))
 		for _, v := range c.VenueTypes {
 			c.VenueSet[v] = struct{}{}
+		}
+		c.CreativeByWH = make(map[uint64]*CreativeRef, len(c.Creatives))
+		for j := range c.Creatives {
+			cr := &c.Creatives[j]
+			c.CreativeByWH[uint64(cr.Width)<<32|uint64(uint32(cr.Height))] = cr
+		}
+		f := c.Shading.ShadeFactor
+		if f <= 0 {
+			f = 0.85
+		}
+		c.ShadedCPM = float64(c.BidCPMMicros) / 1_000_000.0 * f
+		if c.Shading.MinCPM > 0 && c.ShadedCPM < c.Shading.MinCPM {
+			c.ShadedCPM = c.Shading.MinCPM
+		}
+		if c.Shading.MaxCPM > 0 && c.ShadedCPM > c.Shading.MaxCPM {
+			c.ShadedCPM = c.Shading.MaxCPM
 		}
 		c.H3Set = make(map[uint64]struct{}, len(c.H3Cells))
 		for _, cell := range c.H3Cells {

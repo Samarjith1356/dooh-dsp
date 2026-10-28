@@ -6,10 +6,11 @@ import (
 
 	"github.com/dooh-dsp/bidder/internal/adapter"
 	"github.com/dooh-dsp/bidder/internal/budget"
+	"github.com/dooh-dsp/bidder/internal/openrtb"
 	"github.com/dooh-dsp/bidder/internal/snapshot"
 )
 
-func TestMatchLondonRoadside(t *testing.T) {
+func sampleSnap() *snapshot.RulesSnapshot {
 	snap := &snapshot.RulesSnapshot{
 		Campaigns: []snapshot.Campaign{{
 			ID:           1,
@@ -30,7 +31,11 @@ func TestMatchLondonRoadside(t *testing.T) {
 	}
 	hold := &snapshot.Holder{}
 	hold.Store(snap)
-	loaded := hold.Load()
+	return hold.Load()
+}
+
+func TestMatchLondonRoadside(t *testing.T) {
+	loaded := sampleSnap()
 	bud := budget.New()
 	bud.Ensure([]uint32{1}, 1_000_000)
 	imp := adapter.CanonicalImp{
@@ -72,5 +77,37 @@ func TestRejectNonMatchingVenue(t *testing.T) {
 	}, time.Now(), bud)
 	if res.Campaign != nil {
 		t.Fatal("expected no-bid")
+	}
+}
+
+func TestAppendNoBid(t *testing.T) {
+	out := AppendResponse(nil, &openrtb.BidResponse{ID: "x", Nbr: 2})
+	if string(out) != `{"id":"x","nbr":2}` {
+		t.Fatalf("got %s", out)
+	}
+}
+
+func BenchmarkMatch(b *testing.B) {
+	loaded := sampleSnap()
+	bud := budget.New()
+	bud.Ensure([]uint32{1}, 1_000_000_000)
+	imp := adapter.CanonicalImp{
+		VenueTypes: []string{"roadside.billboard"},
+		Lat:        51.5074,
+		Lon:        -0.1278,
+		Country:    "GB",
+		W:          1920,
+		H:          1080,
+		Floor:      2.0,
+		Qty:        14.2,
+	}
+	now := time.Date(2026, 10, 22, 8, 0, 0, 0, time.UTC)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		res := Match(loaded, imp, now, bud)
+		if res.Campaign == nil {
+			b.Fatal("expected bid")
+		}
 	}
 }

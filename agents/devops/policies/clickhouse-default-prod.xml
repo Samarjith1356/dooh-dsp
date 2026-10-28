@@ -1,0 +1,18 @@
+<!-- Production replacement for infra/clickhouse/users.d/default-network.xml
+     Do NOT use <ip>::/0</ip>. Restrict the default user to the Compose/overlay
+     subnet and require a password via CLICKHOUSE_PASSWORD.
+     Trade-off: ingest from unknown hosts will 403 (that is the point). -->
+<clickhouse>
+  <users>
+    <default>
+      <password from_env="CLICKHOUSE_PASSWORD"/>
+      <networks>
+        <ip>10.0.0.0/8</ip>
+        <ip>172.16.0.0/12</ip>
+        <ip>192.168.0.0/16</ip>
+        <ip>127.0.0.1</ip>
+        <ip>::1</ip>
+      </networks>
+    </default>
+  </users>
+</clickhouse>

@@ -24,7 +24,9 @@ def test_architect_prompt_exists():
 
 def test_handle_records_task():
     agent = ArchitectAgent()
-    out = agent.handle(TaskIn(objective="Review OpenRTB no-bid for site traffic", context={"latency": True}))
+    out = agent.handle(
+        TaskIn(objective="Review OpenRTB no-bid for site traffic", context={"latency": True, "skip_llm": True})
+    )
     assert out.agent == "architect"
     assert out.task_id
     assert any(h["to"] == "qa" for h in out.handoffs)

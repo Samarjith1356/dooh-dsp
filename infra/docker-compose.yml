@@ -60,6 +60,7 @@ services:
       - "9000:9000"
     volumes:
       - ./clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./clickhouse/users.d:/etc/clickhouse-server/users.d
       - clickhouse_data:/var/lib/clickhouse
     ulimits:
       nofile:
@@ -77,9 +78,12 @@ services:
       CREATIVE_DIR: /data/creatives
       CREATIVE_PUBLIC_URL: http://localhost:8000/creatives
       BRAIN_URL: http://brain:8001
+      BIDDER_URL: http://bidder:8081
+      INGEST_URL: http://ingest:8090
       CLICKHOUSE_HOST: clickhouse
       CLICKHOUSE_HTTP_PORT: 8123
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      XAI_API_KEY: ${XAI_API_KEY:-}
     volumes:
       - creative_data:/data/creatives
     ports:
@@ -100,6 +104,8 @@ services:
       KAFKA_BROKERS: redpanda:9092
       CLICKHOUSE_HOST: clickhouse
       CLICKHOUSE_HTTP_PORT: 8123
+      BIDDER_URL: http://bidder:8081
+      INGEST_URL: http://ingest:8090
     ports:
       - "8001:8001"
     depends_on:
@@ -149,16 +155,51 @@ services:
       - redpanda
       - clickhouse
 
+  agents:
+    build:
+      context: ..
+      dockerfile: agents/Dockerfile
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      KAFKA_BROKERS: redpanda:9092
+      AGENT_LISTEN: 0.0.0.0:8091
+      BRAIN_URL: http://brain:8001
+      BIDDER_URL: http://bidder:8081
+      INGEST_URL: http://ingest:8090
+      CAMPAIGN_API_URL: http://campaign-api:8000
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_HTTP_PORT: 8123
+      AGENT_HTTP_TIMEOUT_SEC: "3"
+      XAI_BASE_URL: ${XAI_BASE_URL:-https://api.x.ai/v1}
+      AGENT_LLM_MODEL: ${AGENT_LLM_MODEL:-grok-4.7}
+      AGENT_LLM_TIMEOUT_SEC: "90"
+    volumes:
+      - ./clickhouse/users.d:/app/infra/clickhouse/users.d
+    ports:
+      - "8091:8091"
+    depends_on:
+      redis:
+        condition: service_healthy
+      campaign-api:
+        condition: service_started
+
   web:
     build:
       context: ../apps/web
       dockerfile: Dockerfile
     environment:
       NEXT_PUBLIC_API_URL: http://localhost:8000
+      NEXT_PUBLIC_BRAIN_URL: http://localhost:8001
+      NEXT_PUBLIC_AGENTS_URL: http://localhost:8091
+      AGENTS_INTERNAL_URL: http://agents:8091
     ports:
       - "3000:3000"
     depends_on:
       - campaign-api
+      - agents
 
 volumes:
   postgres_data:

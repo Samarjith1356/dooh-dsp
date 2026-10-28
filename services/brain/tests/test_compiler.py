@@ -32,6 +32,28 @@ def test_overlap_priority():
     assert 2 in snap.venue_index["roadside"]
 
 
+def test_consult_memory_blocks_flagged_campaign():
+    from app.compiler import consult_memory
+
+    kept, notes = consult_memory(
+        [_camp(1, 10, ["roadside"]), _camp(2, 10, ["roadside"])],
+        [
+            {
+                "kind": "audit",
+                "title": "compliance REJECTED alcohol roadside",
+                "body": "do not compile",
+                "payload": {"campaign_id": 2, "block_compile": True},
+            },
+            {"kind": "decision", "title": "cap-raise rejected", "body": "Sam rejected cap", "payload": {}},
+            {"kind": "architecture", "title": "Bid-path isolation", "body": "no postgres on bidder", "payload": {}},
+        ],
+    )
+    assert [c.id for c in kept] == [1]
+    assert any("blocked campaign 2" in n for n in notes)
+    assert any("cap-raise rejected" in n for n in notes)
+    assert any(n.startswith("rule:") for n in notes)
+
+
 def test_daypart_bits_roundtrip():
     b64 = encode_dayparts([{"dow": 1, "hours": [7, 8]}])
     import base64

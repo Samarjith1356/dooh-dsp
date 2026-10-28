@@ -6,7 +6,14 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "packages" / "ruleset" / "python"))
+_here = Path(__file__).resolve()
+for parent in _here.parents:
+    candidate = parent / "packages" / "ruleset" / "python"
+    if candidate.is_dir():
+        sys.path.insert(0, str(candidate))
+        break
+else:
+    sys.path.insert(0, "/packages/ruleset/python")
 
 from ruleset import CompiledCampaign, CreativeRef, RulesSnapshot, ShadingParams  # noqa: E402
 
@@ -100,3 +107,38 @@ def compile_snapshot(campaigns: list[CampaignView], snapshot_id: int) -> RulesSn
 
 def snapshot_json(snapshot: RulesSnapshot) -> str:
     return json.dumps(snapshot.to_dict())
+
+
+def consult_memory(
+    campaigns: list[CampaignView], chunks: list[dict]
+) -> tuple[list[CampaignView], list[str]]:
+    """Apply control-plane memory to this compile. Does not touch the Go bidder."""
+    notes: list[str] = []
+    blocked: set[int] = set()
+    for ch in chunks:
+        kind = str(ch.get("kind") or "")
+        title = str(ch.get("title") or "")
+        body = f"{title} {ch.get('body') or ''}".lower()
+        payload = ch.get("payload") or {}
+        cid = payload.get("campaign_id")
+        if kind == "architecture":
+            notes.append(f"rule: {title or body[:80]}")
+        if kind == "decision" and "cap" in body and "reject" in body:
+            notes.append("prior cap-raise rejected — do not expand remaining_micros in this compile")
+        if kind == "audit" and "pacing" in body:
+            notes.append(f"pacing memory: {title[:120]}")
+        if payload.get("block_compile") and cid is not None:
+            blocked.add(int(cid))
+            notes.append(f"memory blocked campaign {cid}: {title[:120]}")
+    kept = [c for c in campaigns if c.id not in blocked]
+    if len(kept) != len(campaigns):
+        notes.append(f"excluded {len(campaigns) - len(kept)} campaign(s) by memory guardrail")
+    # unique, keep order
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for n in notes:
+        if n in seen:
+            continue
+        seen.add(n)
+        uniq.append(n)
+    return kept, uniq[:12]

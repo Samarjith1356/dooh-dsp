@@ -41,6 +41,35 @@ def publish(topic: str, payload: dict) -> None:
         log.info("kafka skip %s %s", topic, payload)
     if topic == "campaign.plan.updated":
         _nudge_brain()
+        _remember(
+            kind="campaign",
+            title=topic,
+            body=json.dumps(payload, default=str)[:2000],
+            payload=payload,
+        )
+
+
+def remember_decision(title: str, body: str, payload: dict | None = None, kind: str = "decision") -> None:
+    _remember(kind=kind, title=title, body=body, payload=payload or {})
+
+
+def _remember(*, kind: str, title: str, body: str, payload: dict) -> None:
+    try:
+        import httpx
+
+        httpx.post(
+            f"{BRAIN_URL}/v1/memory",
+            json={
+                "kind": kind,
+                "source": "campaign-api",
+                "title": title,
+                "body": body,
+                "payload": payload,
+            },
+            timeout=2.0,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.debug("memory sink skip: %s", exc)
 
 
 def _nudge_brain() -> None:

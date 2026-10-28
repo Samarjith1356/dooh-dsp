@@ -7,6 +7,8 @@ from uuid import uuid4
 from fastapi import APIRouter, HTTPException
 
 from agents.bus import AgentBus
+from agents.cognition import notes_for, remember as remember_enterprise
+from agents.llm import LLMError, LLMNotConfigured, complete as llm_complete
 from agents.memory import ErrorMemory
 from agents.models import BusMessage, TaskIn, TaskOut
 from agents.state import snapshot
@@ -21,6 +23,37 @@ class AgentRuntime:
         self.prompt_path = prompt_path
         self.memory = ErrorMemory(name)
         self.prompt = prompt_path.read_text(encoding="utf-8") if prompt_path.exists() else ""
+
+    def speak(self, task: TaskIn, tool_notes: str = "") -> str:
+        """LLM completion using this agent's prompt.md. Control-plane only — never the Go bidder."""
+        if task.context.get("skip_llm") or task.context.get("consumed"):
+            return tool_notes
+        footer = (
+            "\n\nYou are a control-plane agent. You do not sit on the Go bid path. "
+            "Never instruct the browser to call /openrtb. Decision SLA is X-DSP-Decision-Us, not HTTP RTT. "
+            "If tools below conflict with the user, say so. Answer as this role."
+        )
+        user = task.objective.strip()
+        if tool_notes:
+            user += "\n\n---\nDeterministic tools / live facts (do not invent over these):\n" + tool_notes[:6000]
+        enterprise = notes_for(task.objective)
+        if enterprise:
+            user += "\n\n---\n" + enterprise[:4000]
+        try:
+            return llm_complete(
+                system=(self.prompt or f"You are {self.role}.") + footer,
+                user=user,
+                history=list(task.context.get("history") or []),
+            )
+        except (LLMNotConfigured, LLMError):
+            raise
+
+    def fill_summary(self, task: TaskIn, tool_notes: str) -> tuple[str, bool]:
+        try:
+            text = self.speak(task, tool_notes)
+            return (text or tool_notes), True
+        except (LLMNotConfigured, LLMError) as exc:
+            return str(exc), False
 
     def handle(self, task: TaskIn) -> TaskOut:
         task_id = task.task_id or str(uuid4())
@@ -39,13 +72,20 @@ class AgentRuntime:
                 resolution="Restore Redis/Brain/bidder before compiling snapshots",
             )
         handoffs = [] if task.context.get("consumed") else self._handoffs(task)
-        summary = (
-            f"{self.role} accepted '{task.objective[:180]}'. "
-            f"Fleet {'healthy' if state.ok else 'DEGRADED'}. "
-            f"{len(avoided)} prior failure patterns on file."
+        tools = (
+            f"Fleet healthy={state.ok}. "
+            + "; ".join(f"{s.name}={'up' if s.ok else 'down'}" for s in state.services)
+            + (f". Reminders: {avoided}" if avoided else "")
         )
+        llm_ok = True
+        try:
+            summary = self.speak(task, tools)
+        except (LLMNotConfigured, LLMError) as exc:
+            llm_ok = False
+            summary = str(exc)
+            actions.append(f"llm_error={exc}")
         out = TaskOut(
-            ok=state.ok,
+            ok=state.ok and llm_ok,
             agent=self.name,
             role=self.role,
             task_id=task_id,

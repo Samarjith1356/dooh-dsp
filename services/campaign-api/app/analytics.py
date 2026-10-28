@@ -51,6 +51,52 @@ def campaign_hourly(advertiser_id: int, campaign_id: int | None = None) -> list[
     return _query(sql)
 
 
+def recent_events(advertiser_id: int, campaign_id: int | None = None, limit: int = 200) -> list[dict[str, Any]]:
+    lim = max(1, min(int(limit), 500))
+    where = f"advertiser_id = {int(advertiser_id)}"
+    if campaign_id:
+        where += f" AND campaign_id = {int(campaign_id)}"
+    sql = f"""
+    SELECT
+      event_time,
+      event_type,
+      campaign_id,
+      country,
+      venue_type,
+      creative_id,
+      bid_request_id,
+      price_cpm,
+      qty_multiplier,
+      billable_imps,
+      spend_micros
+    FROM rtb.events
+    WHERE {where}
+    ORDER BY event_time DESC
+    LIMIT {lim}
+    """
+    return _query(sql)
+
+
+def kpis(advertiser_id: int, campaign_id: int | None = None) -> dict[str, Any]:
+    rows = campaign_hourly(advertiser_id, campaign_id)
+    bids = sum(float(r.get("bids") or 0) for r in rows if r.get("event_type") == "bid")
+    imps = sum(float(r.get("imps") or 0) for r in rows if r.get("event_type") == "bid")
+    spend = sum(float(r.get("spend_micros") or 0) for r in rows if r.get("event_type") == "bid")
+    sample = recent_events(advertiser_id, campaign_id, limit=500)
+    gb = sum(float(r.get("billable_imps") or 0) for r in sample if r.get("country") in ("GB", "GBR"))
+    ie = sum(float(r.get("billable_imps") or 0) for r in sample if r.get("country") in ("IE", "IRL"))
+    avg_cpm = (spend / 1_000_000) / imps * 1000 if imps else 0
+    return {
+        "bids": bids,
+        "billable_imps": imps,
+        "spend_micros": spend,
+        "avg_cpm": round(avg_cpm, 4),
+        "gb_imps": gb,
+        "ie_imps": ie,
+        "hours": len({str(r.get("hour")) for r in rows}),
+    }
+
+
 def summarize_performance(advertiser_id: int, campaign_id: int | None = None) -> str:
     rows = campaign_hourly(advertiser_id, campaign_id)
     if not rows:

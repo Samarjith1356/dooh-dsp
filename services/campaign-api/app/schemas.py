@@ -50,6 +50,10 @@ class CampaignOut(BaseModel):
     bid_cpm_micros: int
     creative_ids: list[int]
     geofence_ids: list[int]
+    priority: int = 100
+    flight_start: datetime | None = None
+    flight_end: datetime | None = None
+    remaining_micros: int | None = None
 
     class Config:
         from_attributes = True
@@ -68,6 +72,15 @@ class PlanIn(BaseModel):
     shade_factor: float = 0.85
     goal: str = ""
     approved: bool = False
+
+
+class BudgetIn(BaseModel):
+    total_cap_micros: int
+    reset_remaining: bool = True
+
+
+class DaypartsIn(BaseModel):
+    dayparts: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ChatIn(BaseModel):

@@ -10,11 +10,21 @@ from sqlalchemy.orm import Session
 
 from pathlib import Path
 
-from app import agent, analytics, bootstrap, bus, creative, storage
-from app.config import CREATIVE_DIR
+from app import agent, analytics, bootstrap, bus, creative, ops, storage
+from app.config import CREATIVE_DIR, REDIS_URL
 from app.db import get_db, init_db
 from app.models import Advertiser, Campaign, CampaignPlan, Creative, Geofence, Insight, ScreenSpec, Seat
-from app.schemas import AdvertiserIn, AdvertiserOut, CampaignIn, CampaignOut, ChatIn, PlanIn, StateIn
+from app.schemas import (
+    AdvertiserIn,
+    AdvertiserOut,
+    BudgetIn,
+    CampaignIn,
+    CampaignOut,
+    ChatIn,
+    DaypartsIn,
+    PlanIn,
+    StateIn,
+)
 from app.state_machine import InvalidTransition, transition
 
 app = FastAPI(title="DOOH Campaign API", version="0.1.0")
@@ -192,6 +202,27 @@ def list_campaigns(advertiser_id: int | None = None, db: Session = Depends(get_d
     ]
 
 
+def _remaining_micros(campaign_id: int) -> int | None:
+    try:
+        import redis
+
+        r = redis.from_url(REDIS_URL, decode_responses=True, socket_timeout=1.0)
+        raw = r.get(f"budget:{campaign_id}:remaining_micros")
+        return int(raw) if raw is not None else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+@app.get("/v1/campaigns/{campaign_id}", response_model=CampaignOut)
+def get_campaign(campaign_id: int, db: Session = Depends(get_db)):
+    camp = db.get(Campaign, campaign_id)
+    if not camp:
+        raise HTTPException(404, "campaign not found")
+    body = CampaignOut.model_validate(camp)
+    body.remaining_micros = _remaining_micros(camp.id)
+    return body
+
+
 @app.post("/v1/campaigns/{campaign_id}/state", response_model=CampaignOut)
 def set_state(campaign_id: int, body: StateIn, db: Session = Depends(get_db)):
     camp = db.get(Campaign, campaign_id)
@@ -217,6 +248,12 @@ def set_state(campaign_id: int, body: StateIn, db: Session = Depends(get_db)):
     db.commit()
     if camp.state in {"active", "paused", "completed"}:
         bus.publish("campaign.plan.updated", {"campaign_id": camp.id, "state": camp.state})
+        bus.remember_decision(
+            f"Campaign {camp.id} → {camp.state}",
+            f"state transition campaign_id={camp.id} state={camp.state}",
+            {"campaign_id": camp.id, "state": camp.state},
+            kind="campaign",
+        )
     db.refresh(camp)
     return camp
 
@@ -237,6 +274,46 @@ def create_plan(campaign_id: int, body: PlanIn, db: Session = Depends(get_db)):
     return {"id": plan.id, "approved": plan.approved, "goal": plan.goal}
 
 
+@app.post("/v1/campaigns/{campaign_id}/budget", response_model=CampaignOut)
+def set_budget(campaign_id: int, body: BudgetIn, db: Session = Depends(get_db)):
+    camp = db.get(Campaign, campaign_id)
+    if not camp:
+        raise HTTPException(404, "campaign not found")
+    camp.total_cap_micros = body.total_cap_micros
+    db.commit()
+    if body.reset_remaining:
+        try:
+            import redis
+
+            r = redis.from_url(REDIS_URL, decode_responses=True, socket_timeout=1.5)
+            r.set(f"budget:{camp.id}:remaining_micros", str(body.total_cap_micros))
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(502, f"postgres updated but redis remaining failed: {exc}") from exc
+    bus.publish("campaign.plan.updated", {"campaign_id": camp.id, "state": camp.state, "budget": True})
+    bus.remember_decision(
+        f"Budget cap campaign {camp.id}",
+        f"total_cap_micros={body.total_cap_micros} reset_remaining={body.reset_remaining}",
+        {
+            "campaign_id": camp.id,
+            "total_cap_micros": body.total_cap_micros,
+            "reset_remaining": body.reset_remaining,
+        },
+    )
+    db.refresh(camp)
+    return camp
+
+
+@app.post("/v1/plans/{plan_id}/dayparts")
+def set_dayparts(plan_id: int, body: DaypartsIn, db: Session = Depends(get_db)):
+    plan = db.get(CampaignPlan, plan_id)
+    if not plan:
+        raise HTTPException(404, "plan not found")
+    plan.dayparts = body.dayparts
+    db.commit()
+    bus.publish("campaign.plan.updated", {"campaign_id": plan.campaign_id, "plan_id": plan.id})
+    return {"id": plan.id, "dayparts": plan.dayparts}
+
+
 @app.post("/v1/plans/{plan_id}/approve")
 def approve_plan(plan_id: int, db: Session = Depends(get_db)):
     try:
@@ -253,9 +330,50 @@ def chat(body: ChatIn, db: Session = Depends(get_db)):
     return result
 
 
+@app.get("/v1/ops/health")
+def fleet():
+    return ops.fleet_health()
+
+
 @app.get("/v1/analytics/hourly")
 def hourly(advertiser_id: int, campaign_id: int | None = None):
     return analytics.campaign_hourly(advertiser_id, campaign_id)
+
+
+@app.get("/v1/analytics/kpis")
+def kpis(advertiser_id: int, campaign_id: int | None = None):
+    return analytics.kpis(advertiser_id, campaign_id)
+
+
+@app.get("/v1/analytics/events")
+def events(advertiser_id: int, campaign_id: int | None = None, limit: int = 200):
+    return analytics.recent_events(advertiser_id, campaign_id, limit)
+
+
+@app.get("/v1/campaigns/{campaign_id}/plans")
+def list_plans(campaign_id: int, db: Session = Depends(get_db)):
+    rows = (
+        db.query(CampaignPlan)
+        .filter(CampaignPlan.campaign_id == campaign_id)
+        .order_by(CampaignPlan.id.desc())
+        .limit(20)
+        .all()
+    )
+    return [
+        {
+            "id": p.id,
+            "goal": p.goal,
+            "approved": p.approved,
+            "dayparts": p.dayparts,
+            "venue_allowlist": p.venue_allowlist,
+            "countries": p.countries,
+            "geofence_ids": p.geofence_ids,
+            "bid_cpm_micros": p.bid_cpm_micros,
+            "shade_factor": p.shade_factor,
+            "created_at": p.created_at.isoformat() if p.created_at else None,
+        }
+        for p in rows
+    ]
 
 
 @app.get("/v1/insights")

@@ -50,6 +50,17 @@ class AgentBus:
                 if msg.kind == "health":
                     client.publish(BUS_HEALTH, raw)
                     client.set("agents:health:latest", raw)
+                feed_item = {
+                    "id": f"bus-{msg.ts.isoformat()}-{msg.from_agent}",
+                    "at": msg.ts.isoformat() if hasattr(msg.ts, "isoformat") else str(msg.ts),
+                    "from": msg.from_agent,
+                    "to": msg.to_agent,
+                    "severity": "critical" if msg.kind == "error" else "info",
+                    "topic": msg.kind,
+                    "text": json.dumps(msg.payload, default=str)[:280],
+                }
+                client.lpush("agents:feed", json.dumps(feed_item))
+                client.ltrim("agents:feed", 0, 99)
             except Exception as exc:  # noqa: BLE001
                 log.warning("redis publish failed: %s", exc)
         self._kafka_send(payload)

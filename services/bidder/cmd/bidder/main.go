@@ -2,16 +2,18 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dooh-dsp/bidder/internal/adapter"
 	"github.com/dooh-dsp/bidder/internal/budget"
+	"github.com/dooh-dsp/bidder/internal/lat"
 	"github.com/dooh-dsp/bidder/internal/logasync"
 	"github.com/dooh-dsp/bidder/internal/matcher"
 	"github.com/dooh-dsp/bidder/internal/openrtb"
@@ -19,13 +21,28 @@ import (
 	"github.com/dooh-dsp/bidder/internal/snapshot"
 )
 
+var (
+	london     *time.Location
+	bodyPool   = sync.Pool{New: func() any { b := make([]byte, 0, 4096); return &b }}
+	respPool   = sync.Pool{New: func() any { b := make([]byte, 0, 1024); return &b }}
+	reqPool    = sync.Pool{New: func() any { return &openrtb.BidRequest{} }}
+)
+
+func init() {
+	loc, err := time.LoadLocation("Europe/London")
+	if err != nil {
+		loc = time.UTC
+	}
+	london = loc
+}
+
 func main() {
 	listen := env("BIDDER_LISTEN", ":8081")
 	ad := adapter.New(env("SSP_ADAPTER", "simulator"))
 	hold := &snapshot.Holder{}
 	bud := budget.New()
-	logs := logasync.New(env("KAFKA_BROKERS", "localhost:19092"))
 	ingest := env("INGEST_URL", "http://localhost:8090/events")
+	logs := logasync.New(ingest)
 	rdb := redisc.ParseURL(env("REDIS_URL", "redis://localhost:6379/0"))
 
 	ctx := context.Background()
@@ -44,50 +61,75 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
-		w.Write([]byte(`{"ok":true,"adapter":"` + ad.Name() + `"}`))
+		n, avg, max, last := lat.Snapshot()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(
+			`{"ok":true,"adapter":"` + ad.Name() +
+				`","bids":` + strconv.FormatUint(n, 10) +
+				`,"avg_decision_us":` + strconv.FormatUint(avg, 10) +
+				`,"max_decision_us":` + strconv.FormatUint(max, 10) +
+				`,"last_decision_us":` + strconv.FormatUint(last, 10) + `}`,
+		))
 	})
 	mux.HandleFunc("/openrtb/v2/bid", func(w http.ResponseWriter, r *http.Request) {
-		handleBid(w, r, ad, hold, bud, logs, ingest)
+		handleBid(w, r, ad, hold, bud, logs)
 	})
 	mux.HandleFunc("/nurl", func(w http.ResponseWriter, r *http.Request) {
-		handleNotice(w, r, "win", logs, ingest)
+		handleNotice(w, r, "win", logs)
 	})
 	mux.HandleFunc("/burl", func(w http.ResponseWriter, r *http.Request) {
-		handleNotice(w, r, "pop", logs, ingest)
+		handleNotice(w, r, "pop", logs)
 	})
 
-	log.Printf("bidder adapter=%s listen=%s (no postgres, no llm on this path)", ad.Name(), listen)
-	if err := http.ListenAndServe(listen, mux); err != nil {
+	log.Printf("bidder adapter=%s listen=%s (decision budget <1ms)", ad.Name(), listen)
+	srv := &http.Server{
+		Addr:              listen,
+		Handler:           mux,
+		ReadHeaderTimeout: 200 * time.Millisecond,
+		ReadTimeout:       800 * time.Millisecond,
+		WriteTimeout:      800 * time.Millisecond,
+		IdleTimeout:       30 * time.Second,
+	}
+	if err := srv.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func handleBid(w http.ResponseWriter, r *http.Request, ad adapter.SspAdapter, hold *snapshot.Holder, bud *budget.Cache, logs *logasync.Writer, ingest string) {
+func handleBid(w http.ResponseWriter, r *http.Request, ad adapter.SspAdapter, hold *snapshot.Holder, bud *budget.Cache, logs *logasync.Writer) {
 	start := time.Now()
 	defer r.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+
+	bufp := bodyPool.Get().(*[]byte)
+	buf := (*bufp)[:0]
+	body, err := readAll(r.Body, buf)
 	if err != nil {
+		bodyPool.Put(bufp)
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	var req openrtb.BidRequest
-	if err := json.Unmarshal(body, &req); err != nil {
+
+	req := reqPool.Get().(*openrtb.BidRequest)
+	*req = openrtb.BidRequest{}
+	err = openrtb.UnmarshalBid(body, req)
+	*bufp = body
+	bodyPool.Put(bufp)
+	if err != nil {
+		reqPool.Put(req)
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
-	if !openrtb.IsDOOH(&req) {
-		writeJSON(w, openrtb.BidResponse{ID: req.ID, Nbr: 2})
+
+	if !openrtb.IsDOOH(req) {
+		writeNoBid(w, req.ID, 2, start)
+		reqPool.Put(req)
 		return
 	}
-	if req.TMax > 0 && time.Since(start) > time.Duration(req.TMax)*time.Millisecond {
-		writeJSON(w, openrtb.BidResponse{ID: req.ID, Nbr: 2})
-		return
-	}
-	imp := ad.Normalize(&req)
+
+	imp := ad.Normalize(req)
 	snap := hold.Load()
-	res := matcher.Match(snap, imp, time.Now().In(time.FixedZone("Europe/London", 0)), bud)
-	resp := matcher.BuildResponse(&req, imp, ad, res)
-	writeJSON(w, resp)
+	res := matcher.Match(snap, imp, time.Now().In(london), bud)
+	resp := matcher.BuildResponse(req, ad, res)
+	writeResp(w, resp, start)
 
 	evt := logasync.Event{
 		EventType:    "nobid",
@@ -113,14 +155,48 @@ func handleBid(w http.ResponseWriter, r *http.Request, ad adapter.SspAdapter, ho
 		evt.SpendMicros = res.SpendMicros
 	}
 	logs.Log(evt)
-	go logs.PostHTTP(ingest, evt)
+	reqPool.Put(req)
 }
 
-func handleNotice(w http.ResponseWriter, r *http.Request, kind string, logs *logasync.Writer, ingest string) {
-	evt := logasync.Event{EventType: kind, BidRequestID: r.URL.Query().Get("id")}
-	logs.Log(evt)
-	go logs.PostHTTP(ingest, evt)
+func handleNotice(w http.ResponseWriter, r *http.Request, kind string, logs *logasync.Writer) {
+	logs.Log(logasync.Event{EventType: kind, BidRequestID: r.URL.Query().Get("id")})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func writeNoBid(w http.ResponseWriter, id string, nbr int, start time.Time) {
+	writeResp(w, &openrtb.BidResponse{ID: id, Nbr: nbr}, start)
+}
+
+func writeResp(w http.ResponseWriter, resp *openrtb.BidResponse, start time.Time) {
+	ns := time.Since(start).Nanoseconds()
+	lat.Observe(ns)
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-DSP-Decision-Us", strconv.FormatInt(ns/1000, 10))
+	bufp := respPool.Get().(*[]byte)
+	out := matcher.AppendResponse((*bufp)[:0], resp)
+	_, _ = w.Write(out)
+	*bufp = out
+	respPool.Put(bufp)
+}
+
+func readAll(r io.Reader, buf []byte) ([]byte, error) {
+	const max = 1 << 20
+	tmp := make([]byte, 4096)
+	for {
+		n, err := r.Read(tmp)
+		if n > 0 {
+			if len(buf)+n > max {
+				return nil, io.ErrUnexpectedEOF
+			}
+			buf = append(buf, tmp[:n]...)
+		}
+		if err == io.EOF {
+			return buf, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
 }
 
 func pollSnapshot(ctx context.Context, r *redisc.Client, hold *snapshot.Holder, bud *budget.Cache) {
@@ -159,12 +235,6 @@ func pollSnapshot(ctx context.Context, r *redisc.Client, hold *snapshot.Holder, 
 			log.Printf("loaded snapshot %s campaigns=%d", sid, len(snap.Campaigns))
 		}
 	}
-}
-
-func writeJSON(w http.ResponseWriter, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	enc := json.NewEncoder(w)
-	_ = enc.Encode(v)
 }
 
 func env(k, d string) string {
