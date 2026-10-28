@@ -15,6 +15,15 @@ type BidRequest struct {
 	WSeat  []string        `json:"wseat"`
 	Test   int             `json:"test"`
 	Ext    json.RawMessage `json:"ext,omitempty"`
+
+	// Backing storage for the fast parser: a pooled request points Dooh,
+	// Imp[0] and its Banner/Video/Qty here, so parsing does not allocate.
+	doohBuf   Dooh
+	impBuf    [1]Imp
+	bannerBuf Banner
+	videoBuf  Video
+	qtyBuf    Qty
+	venueBuf  [8]string
 }
 
 type Dooh struct {
