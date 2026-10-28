@@ -21,3 +21,4 @@ postgres-data/
 *.log
 apps/web/.turbo/
 coverage/
+agents/.memory/
