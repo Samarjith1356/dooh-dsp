@@ -36,35 +36,47 @@ const (
 	flushEvery = 50 * time.Millisecond
 )
 
-// Writer ships events to ingest's /events/batch in JSON-array batches from
-// one background goroutine. Log never blocks: when the buffer is full the
-// event is counted in Dropped and discarded.
+// Writer ships events from one background goroutine, in batches, to a sink:
+// Kafka (NewKafka) or ingest's HTTP batch endpoint (New). Log never blocks:
+// when the buffer is full the event is counted in Dropped and discarded.
 type Writer struct {
 	ch      chan Event
-	url     string
-	client  *http.Client
+	ship    func(batch []Event)
 	dropped atomic.Uint64
 	failed  atomic.Uint64
+
+	url    string
+	client *http.Client
+	buf    []byte
 }
 
-// New takes the ingest URL. ".../events" is upgraded to ".../events/batch";
-// any other URL must accept a JSON array of events.
+func newWriter() *Writer {
+	return &Writer{ch: make(chan Event, 16384)}
+}
+
+// New ships to ingest over HTTP. ".../events" is upgraded to
+// ".../events/batch"; any other URL must accept a JSON array of events.
+// An empty URL discards events.
 func New(ingest string) *Writer {
-	url := strings.TrimSpace(ingest)
-	if strings.HasSuffix(url, "/events") {
-		url += "/batch"
+	w := newWriter()
+	w.url = strings.TrimSpace(ingest)
+	if strings.HasSuffix(w.url, "/events") {
+		w.url += "/batch"
 	}
-	w := &Writer{
-		ch:  make(chan Event, 16384),
-		url: url,
-		client: &http.Client{
-			Timeout: 2 * time.Second,
-			Transport: &http.Transport{
-				MaxIdleConns:        4,
-				MaxIdleConnsPerHost: 4,
-				IdleConnTimeout:     90 * time.Second,
-			},
+	w.client = &http.Client{
+		Timeout: 2 * time.Second,
+		Transport: &http.Transport{
+			MaxIdleConns:        4,
+			MaxIdleConnsPerHost: 4,
+			IdleConnTimeout:     90 * time.Second,
 		},
+	}
+	w.ship = func(batch []Event) {
+		if w.url == "" {
+			return
+		}
+		w.buf = AppendBatch(w.buf[:0], batch)
+		w.post(w.buf, len(batch))
 	}
 	go w.loop()
 	return w
@@ -84,22 +96,18 @@ func (w *Writer) Log(e Event) {
 // Dropped counts events discarded because the buffer was full.
 func (w *Writer) Dropped() uint64 { return w.dropped.Load() }
 
-// Failed counts events lost to failed ingest POSTs.
+// Failed counts events the sink could not deliver.
 func (w *Writer) Failed() uint64 { return w.failed.Load() }
 
 func (w *Writer) loop() {
 	batch := make([]Event, 0, batchMax)
-	buf := make([]byte, 0, 64<<10)
 	tick := time.NewTicker(flushEvery)
 	defer tick.Stop()
 	flush := func() {
 		if len(batch) == 0 {
 			return
 		}
-		if w.url != "" {
-			buf = AppendBatch(buf[:0], batch)
-			w.post(buf, len(batch))
-		}
+		w.ship(batch)
 		clear(batch)
 		batch = batch[:0]
 	}

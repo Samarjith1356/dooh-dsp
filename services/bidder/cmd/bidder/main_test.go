@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/dooh-dsp/bidder/internal/adapter"
 	"github.com/dooh-dsp/bidder/internal/budget"
@@ -167,4 +169,37 @@ func BenchmarkLoopback1(b *testing.B) {
 
 func BenchmarkLoopback32(b *testing.B) {
 	runLoopback(b, http.HandlerFunc(testBidder("simulator", 1<<62).handleBid), 32)
+}
+
+func TestNoBidSampling(t *testing.T) {
+	var got atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var v []map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&v)
+		got.Add(int64(len(v)))
+	}))
+	defer srv.Close()
+	hold := &snapshot.Holder{}
+	hold.Store(testSnap())
+	bud := budget.New()
+	bud.Ensure([]uint32{1}, 1<<50)
+	b := newBidder(adapter.New("simulator"), bud, logasync.New(srv.URL+"/events"), "")
+	b.load(hold.Load())
+	b.nobidSample = 100
+	nobid := bytes.Replace(testPayload, []byte(`"country":"GB"`), []byte(`"country":"FR"`), 1)
+	for i := 0; i < 2000; i++ {
+		post(b, nobid)
+	}
+	for i := 0; i < 50; i++ {
+		post(b, testPayload) // bids are never sampled
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && got.Load() < 50 {
+		time.Sleep(20 * time.Millisecond)
+	}
+	time.Sleep(150 * time.Millisecond)
+	// 50 bids + ~20 sampled no-bids (binomial, n=2000, p=0.01).
+	if n := got.Load(); n < 52 || n > 100 {
+		t.Fatalf("logged %d events, want 50 bids + ~20 no-bids", n)
+	}
 }

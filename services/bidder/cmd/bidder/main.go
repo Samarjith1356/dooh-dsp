@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"math/rand/v2"
 	"net/http"
 	"os"
 	"runtime/debug"
@@ -48,15 +49,51 @@ type bidder struct {
 	logs       *logasync.Writer
 	noticeBase string
 	eng        atomic.Pointer[matcher.Engine]
+
+	// nobidSample logs 1 in N no-bid events (bids, wins and proof-of-play
+	// are always logged). Spend and KPI queries only read bid events.
+	nobidSample uint32
 }
 
 func newBidder(ad adapter.SspAdapter, bud *budget.Cache, logs *logasync.Writer, noticeBase string) *bidder {
-	return &bidder{ad: ad, bud: bud, logs: logs, noticeBase: strings.TrimRight(noticeBase, "/")}
+	return &bidder{ad: ad, bud: bud, logs: logs, noticeBase: strings.TrimRight(noticeBase, "/"), nobidSample: 1}
 }
 
 // load compiles a snapshot and swaps it in atomically.
 func (b *bidder) load(snap *snapshot.RulesSnapshot) {
 	b.eng.Store(matcher.Compile(snap, b.ad, b.bud, b.noticeBase))
+}
+
+// newEventWriter picks the event sink: Kafka (EVENT_SINK=kafka, the default
+// when KAFKA_BROKERS is set) or ingest over HTTP (EVENT_SINK=http).
+func newEventWriter() (*logasync.Writer, string) {
+	brokers := env("KAFKA_BROKERS", "")
+	sink := env("EVENT_SINK", "")
+	if sink == "" {
+		sink = "http"
+		if brokers != "" {
+			sink = "kafka"
+		}
+	}
+	if sink == "kafka" {
+		w, err := logasync.NewKafka(brokers, env("EVENT_TOPIC", "rtb.bid_log"))
+		if err == nil {
+			return w, "kafka"
+		}
+		log.Printf("kafka event sink unavailable (%s); falling back to http", err)
+	}
+	return logasync.New(env("INGEST_URL", "http://localhost:8090/events")), "http"
+}
+
+func campaignIDs(s *snapshot.RulesSnapshot) []uint32 {
+	if s == nil {
+		return nil
+	}
+	ids := make([]uint32, 0, len(s.Campaigns))
+	for i := range s.Campaigns {
+		ids = append(ids, s.Campaigns[i].ID)
+	}
+	return ids
 }
 
 func main() {
@@ -65,23 +102,18 @@ func main() {
 	ad := adapter.New(env("SSP_ADAPTER", "simulator"))
 	hold := &snapshot.Holder{}
 	bud := budget.New()
-	logs := logasync.New(env("INGEST_URL", "http://localhost:8090/events"))
+	logs, sink := newEventWriter()
 	b := newBidder(ad, bud, logs, env("NOTICE_BASE_URL", "http://bidder:8081"))
-	rdb := redisc.ParseURL(env("REDIS_URL", "redis://localhost:6379/0"))
+	if n, err := strconv.Atoi(env("NOBID_SAMPLE_RATE", "100")); err == nil && n > 0 {
+		b.nobidSample = uint32(n)
+	}
+	redisURL := env("REDIS_URL", "redis://localhost:6379/0")
+	// Separate connections so a large snapshot read never delays budget sync.
+	snapRedis, budRedis := redisc.ParseURL(redisURL), redisc.ParseURL(redisURL)
 
 	ctx := context.Background()
-	go pollSnapshot(ctx, rdb, hold, b)
-	go budget.RefreshLoop(ctx, rdb, func() []uint32 {
-		s := hold.Load()
-		if s == nil {
-			return nil
-		}
-		ids := make([]uint32, 0, len(s.Campaigns))
-		for i := range s.Campaigns {
-			ids = append(ids, s.Campaigns[i].ID)
-		}
-		return ids
-	}, bud)
+	go pollSnapshot(ctx, snapRedis, budRedis, hold, b)
+	go budget.SyncLoop(ctx, budRedis, func() []uint32 { return campaignIDs(hold.Load()) }, bud)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
@@ -103,6 +135,8 @@ func main() {
 				`,"p99_compute_us":` + u(c.P99) +
 				`,"p999_compute_us":` + u(c.P999) +
 				`,"window_max_compute_us":` + u(c.WindowMaxUs) +
+				`,"event_sink":"` + sink + `"` +
+				`,"nobid_sample_rate":` + u(uint64(b.nobidSample)) +
 				`,"log_dropped":` + u(logs.Dropped()) +
 				`,"log_failed":` + u(logs.Failed()) + `}`,
 		))
@@ -206,6 +240,8 @@ func (b *bidder) handleBid(w http.ResponseWriter, r *http.Request) {
 		evt.QtyMultiplier = res.Qty
 		evt.BillableImps = res.Qty
 		evt.SpendMicros = res.SpendMicros
+	} else if b.nobidSample > 1 && rand.Uint32N(b.nobidSample) != 0 {
+		return
 	}
 	b.logs.Log(evt)
 }
@@ -265,7 +301,7 @@ func readBody(r *http.Request, buf []byte) ([]byte, error) {
 	}
 }
 
-func pollSnapshot(ctx context.Context, r *redisc.Client, hold *snapshot.Holder, b *bidder) {
+func pollSnapshot(ctx context.Context, r, budRedis *redisc.Client, hold *snapshot.Holder, b *bidder) {
 	tick := time.NewTicker(500 * time.Millisecond)
 	defer tick.Stop()
 	var last string
@@ -291,11 +327,13 @@ func pollSnapshot(ctx context.Context, r *redisc.Client, hold *snapshot.Holder, 
 				log.Printf("snapshot parse: %s", err)
 				continue
 			}
-			ids := make([]uint32, 0, len(snap.Campaigns))
-			for i := range snap.Campaigns {
-				ids = append(ids, snap.Campaigns[i].ID)
+			// Load real budgets before the new campaigns go live. If Redis
+			// fails here they stay Unknown (no bid) until SyncLoop succeeds.
+			cctx, cancel = context.WithTimeout(ctx, 500*time.Millisecond)
+			if err := b.bud.Sync(cctx, budRedis, campaignIDs(snap)); err != nil {
+				log.Printf("budget sync on snapshot load: %s", err)
 			}
-			b.bud.Ensure(ids, 50_000_000)
+			cancel()
 			hold.Store(snap)
 			b.load(snap)
 			last = sid

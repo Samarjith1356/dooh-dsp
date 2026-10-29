@@ -5,7 +5,6 @@ import (
 	"math/bits"
 	"strconv"
 	"sync"
-	"sync/atomic"
 
 	"github.com/dooh-dsp/bidder/internal/adapter"
 	"github.com/dooh-dsp/bidder/internal/budget"
@@ -24,7 +23,7 @@ type Engine struct {
 	Snap  *snapshot.RulesSnapshot
 	bud   *budget.Cache
 	words int
-	slots []*atomic.Int64
+	slots []*budget.Slot
 
 	anyVenue   bitset
 	venue      map[string]bitset
@@ -61,7 +60,7 @@ func Compile(snap *snapshot.RulesSnapshot, ad adapter.SspAdapter, bud *budget.Ca
 	w := (n + 63) / 64
 	e := &Engine{
 		Snap: snap, bud: bud, words: w,
-		slots:      make([]*atomic.Int64, n),
+		slots:      make([]*budget.Slot, n),
 		anyVenue:   make(bitset, w),
 		venue:      map[string]bitset{},
 		anyCountry: make(bitset, w),

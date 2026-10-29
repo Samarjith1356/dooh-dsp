@@ -1,7 +1,20 @@
+// Package budget keeps each campaign's remaining micros in memory for the
+// bid path and keeps it in step with one shared counter in Redis, so any
+// number of bidder instances draw down the same budget.
+//
+// Bid path: one atomic load to check, one CAS to spend. Background: every
+// SyncEvery, one Lua call pushes each campaign's unsynced spend to Redis
+// (DECRBY) and reads back the shared remaining value.
+//
+// Brain still SETs budget:{id}:remaining_micros every pacing tick from
+// ClickHouse spend. Spend that ClickHouse has not ingested yet is briefly
+// added back at that moment, so worst-case overspend is the ingest lag's
+// worth of spend, not "until the next Brain tick" per instance.
 package budget
 
 import (
 	"context"
+	"log"
 	"math"
 	"strconv"
 	"strings"
@@ -14,30 +27,60 @@ import (
 // bidder never bids on it.
 const Unknown = math.MinInt64
 
-type RedisClient interface {
-	MGet(ctx context.Context, keys []string) ([]string, []bool, error)
+// SyncEvery is how often local spend is pushed to Redis.
+var SyncEvery = 100 * time.Millisecond
+
+// syncScript decrements each existing key by its delta and returns the new
+// value, or nil for a missing key. It never creates keys: a campaign Brain
+// has not budgeted stays Unknown. One round trip, atomic across instances.
+const syncScript = `local out = {}
+for i, k in ipairs(KEYS) do
+  if redis.call('EXISTS', k) == 1 then
+    local d = tonumber(ARGV[i])
+    if d ~= 0 then
+      out[i] = redis.call('DECRBY', k, d)
+    else
+      out[i] = tonumber(redis.call('GET', k)) or 0
+    end
+  else
+    out[i] = false
+  end
+end
+return out`
+
+type Scripter interface {
+	Eval(ctx context.Context, script string, keys, argv []string) ([]string, []bool, error)
 }
 
-// Cache holds remaining micros per campaign in one atomic counter each.
-// The bid path does a single atomic load (and an atomic add when it bids);
-// Redis refreshes store into the same counters, so readers never lock.
+// Slot is one campaign's budget state.
+type Slot struct {
+	rem     atomic.Int64 // remaining micros as the bid path sees it
+	pending atomic.Int64 // spent locally, not yet pushed to Redis
+}
+
+func (s *Slot) Load() int64 { return s.rem.Load() }
+
+// Store sets the remaining value directly (tests and seeding).
+func (s *Slot) Store(v int64) { s.rem.Store(v) }
+
+// Cache maps campaign IDs to stable slots. Readers never lock.
 type Cache struct {
 	mu    sync.Mutex // guards slot creation only
-	slots atomic.Pointer[map[uint32]*atomic.Int64]
+	slots atomic.Pointer[map[uint32]*Slot]
 	ready atomic.Bool
 }
 
 func New() *Cache {
 	c := &Cache{}
-	m := map[uint32]*atomic.Int64{}
+	m := map[uint32]*Slot{}
 	c.slots.Store(&m)
 	return c
 }
 
 func (c *Cache) Ready() bool { return c.ready.Load() }
 
-// Slot returns the stable counter for a campaign, creating it as Unknown.
-func (c *Cache) Slot(id uint32) *atomic.Int64 {
+// Slot returns the stable slot for a campaign, creating it as Unknown.
+func (c *Cache) Slot(id uint32) *Slot {
 	if s, ok := (*c.slots.Load())[id]; ok {
 		return s
 	}
@@ -47,12 +90,12 @@ func (c *Cache) Slot(id uint32) *atomic.Int64 {
 	if s, ok := old[id]; ok {
 		return s
 	}
-	next := make(map[uint32]*atomic.Int64, len(old)+1)
+	next := make(map[uint32]*Slot, len(old)+1)
 	for k, v := range old {
 		next[k] = v
 	}
-	s := &atomic.Int64{}
-	s.Store(Unknown)
+	s := &Slot{}
+	s.rem.Store(Unknown)
 	next[id] = s
 	c.slots.Store(&next)
 	return s
@@ -66,24 +109,25 @@ func (c *Cache) Remaining(id uint32) (int64, bool) {
 	if !ok {
 		return 0, false
 	}
-	v := s.Load()
+	v := s.rem.Load()
 	if v == Unknown {
 		return 0, false
 	}
 	return v, true
 }
 
-// Spend deducts a bid's spend locally so the bidder stops before the next
-// Redis refresh once a campaign runs dry.
-func Spend(s *atomic.Int64, micros int64) {
+// Spend records a bid: deducts locally right away so this instance stops
+// once the campaign runs dry, and queues the amount for Redis.
+func Spend(s *Slot, micros int64) {
 	if s == nil || micros <= 0 {
 		return
 	}
+	s.pending.Add(micros)
 	for {
-		v := s.Load()
-		// A refresh may have marked the slot Unknown since the match;
+		v := s.rem.Load()
+		// A sync may have marked the slot Unknown since the match;
 		// subtracting from MinInt64 would wrap to a huge positive budget.
-		if v == Unknown || s.CompareAndSwap(v, v-micros) {
+		if v == Unknown || s.rem.CompareAndSwap(v, v-micros) {
 			return
 		}
 	}
@@ -97,9 +141,9 @@ func (c *Cache) SetAll(m map[uint32]int64) {
 	}
 	for id, s := range *c.slots.Load() {
 		if v, ok := m[id]; ok {
-			s.Store(v)
+			s.rem.Store(v)
 		} else {
-			s.Store(Unknown)
+			s.rem.Store(Unknown)
 		}
 	}
 	c.ready.Store(true)
@@ -107,51 +151,83 @@ func (c *Cache) SetAll(m map[uint32]int64) {
 
 func ParseInt(s string) int64 {
 	s = strings.TrimSpace(s)
-	n, _ := strconv.ParseInt(s, 10, 64)
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		f, _ := strconv.ParseFloat(s, 64)
+		n = int64(f)
+	}
 	return n
 }
 
 // Ensure seeds campaigns that have no value yet with defaultRem.
 func (c *Cache) Ensure(ids []uint32, defaultRem int64) {
 	for _, id := range ids {
-		c.Slot(id).CompareAndSwap(Unknown, defaultRem)
+		c.Slot(id).rem.CompareAndSwap(Unknown, defaultRem)
 	}
 	c.ready.Store(true)
 }
 
-// RefreshLoop reads every campaign's remaining budget from Redis in one MGET
-// round trip every 250ms. Never called from the bid path.
-func RefreshLoop(ctx context.Context, r RedisClient, idsFn func() []uint32, dst *Cache) {
-	tick := time.NewTicker(250 * time.Millisecond)
+func Key(id uint32) string {
+	return "budget:" + strconv.FormatUint(uint64(id), 10) + ":remaining_micros"
+}
+
+// Sync pushes unsynced spend for ids to Redis and loads the shared values.
+// On error the spend is put back and retried on the next call, so no spend
+// is lost while Redis is unreachable.
+func (c *Cache) Sync(ctx context.Context, r Scripter, ids []uint32) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	keys := make([]string, len(ids))
+	argv := make([]string, len(ids))
+	slots := make([]*Slot, len(ids))
+	deltas := make([]int64, len(ids))
+	for i, id := range ids {
+		s := c.Slot(id)
+		slots[i] = s
+		deltas[i] = s.pending.Swap(0)
+		keys[i] = Key(id)
+		argv[i] = strconv.FormatInt(deltas[i], 10)
+	}
+	vals, found, err := r.Eval(ctx, syncScript, keys, argv)
+	if err != nil {
+		for i, s := range slots {
+			s.pending.Add(deltas[i])
+		}
+		return err
+	}
+	for i, s := range slots {
+		if !found[i] {
+			s.rem.Store(Unknown)
+			continue
+		}
+		// Bids placed since the swap are in pending and not yet in Redis.
+		s.rem.Store(ParseInt(vals[i]) - s.pending.Load())
+	}
+	c.ready.Store(true)
+	return nil
+}
+
+// SyncLoop runs Sync every SyncEvery. Never called from the bid path.
+func SyncLoop(ctx context.Context, r Scripter, idsFn func() []uint32, dst *Cache) {
+	tick := time.NewTicker(SyncEvery)
 	defer tick.Stop()
-	var keys []string
+	var lastErr string
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
-			ids := idsFn()
-			if len(ids) == 0 {
-				continue
-			}
-			keys = keys[:0]
-			for _, id := range ids {
-				keys = append(keys, "budget:"+strconv.FormatUint(uint64(id), 10)+":remaining_micros")
-			}
-			cctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
-			vals, found, err := r.MGet(cctx, keys)
+			cctx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+			err := dst.Sync(cctx, r, idsFn())
 			cancel()
+			if err != nil && err.Error() != lastErr {
+				log.Printf("budget sync: %s", err)
+			}
 			if err != nil {
-				continue
-			}
-			next := make(map[uint32]int64, len(ids))
-			for i, id := range ids {
-				if found[i] {
-					next[id] = ParseInt(vals[i])
-				}
-			}
-			if len(next) > 0 {
-				dst.SetAll(next)
+				lastErr = err.Error()
+			} else {
+				lastErr = ""
 			}
 		}
 	}

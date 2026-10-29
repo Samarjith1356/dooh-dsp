@@ -108,8 +108,12 @@ def _flusher() -> None:
 
 
 def enqueue(raw: dict[str, Any]) -> None:
+    enqueue_rows([_row(raw)])
+
+
+def enqueue_rows(rows: list[dict[str, Any]]) -> None:
     with _lock:
-        _buf.append(_row(raw))
+        _buf.extend(rows)
         n = len(_buf)
     if n >= 1000:
         _flush(force=True)
@@ -134,22 +138,36 @@ def health():
 
 
 def _kafka_loop() -> None:
+    """Consume bidder events from rtb.bid_log in batches of up to 5000."""
     try:
         from kafka import KafkaConsumer
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        log.error("kafka consumer disabled, bidder events on Kafka will not reach ClickHouse: %s", exc)
         return
     while True:
         try:
             consumer = KafkaConsumer(
                 "rtb.bid_log",
                 bootstrap_servers=KAFKA_BROKERS.split(","),
-                value_deserializer=lambda m: json.loads(m.decode("utf-8")),
                 group_id="ingest",
-                auto_offset_reset="latest",
+                # A new group starts at the beginning so events produced
+                # before ingest first joins are not skipped.
+                auto_offset_reset="earliest",
+                max_poll_records=5000,
             )
-            for msg in consumer:
-                if isinstance(msg.value, dict):
-                    enqueue(msg.value)
+            log.info("kafka consumer joined rtb.bid_log")
+            while True:
+                rows: list[dict[str, Any]] = []
+                for records in consumer.poll(timeout_ms=500).values():
+                    for msg in records:
+                        try:
+                            value = json.loads(msg.value)
+                        except ValueError:
+                            continue
+                        if isinstance(value, dict):
+                            rows.append(_row(value))
+                if rows:
+                    enqueue_rows(rows)
         except Exception as exc:  # noqa: BLE001
             log.warning("kafka ingest: %s", exc)
             time.sleep(3)

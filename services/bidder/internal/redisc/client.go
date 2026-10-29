@@ -36,7 +36,7 @@ func ParseURL(raw string) *Client {
 
 // Get returns ErrMissing for a nil reply.
 func (c *Client) Get(ctx context.Context, key string) (string, error) {
-	vals, found, err := c.do(ctx, "GET", []string{key}, false)
+	vals, found, err := c.do(ctx, "GET", []string{key}, 1, false)
 	if err != nil {
 		return "", err
 	}
@@ -51,10 +51,23 @@ func (c *Client) MGet(ctx context.Context, keys []string) ([]string, []bool, err
 	if len(keys) == 0 {
 		return nil, nil, nil
 	}
-	return c.do(ctx, "MGET", keys, true)
+	return c.do(ctx, "MGET", keys, len(keys), true)
 }
 
-func (c *Client) do(ctx context.Context, cmd string, args []string, array bool) ([]string, []bool, error) {
+// Eval runs a Lua script that returns one value (or nil) per key.
+func (c *Client) Eval(ctx context.Context, script string, keys, argv []string) ([]string, []bool, error) {
+	if len(keys) == 0 {
+		return nil, nil, nil
+	}
+	args := make([]string, 0, 2+len(keys)+len(argv))
+	args = append(args, script, strconv.Itoa(len(keys)))
+	args = append(args, keys...)
+	args = append(args, argv...)
+	return c.do(ctx, "EVAL", args, len(keys), true)
+}
+
+// do sends one command and reads n replies (an array of n when array).
+func (c *Client) do(ctx context.Context, cmd string, args []string, n int, array bool) ([]string, []bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.conn == nil {
@@ -73,7 +86,7 @@ func (c *Client) do(ctx context.Context, cmd string, args []string, array bool) 
 	_ = c.conn.SetDeadline(deadline)
 
 	c.wb = appendCommand(c.wb[:0], cmd, args)
-	vals, found, err := c.roundTrip(len(args), array)
+	vals, found, err := c.roundTrip(n, array)
 	if err != nil {
 		// Any protocol or I/O error leaves the stream in an unknown state.
 		_ = c.conn.Close()
