@@ -46,7 +46,10 @@ func main() {
 	logs := logasync.New(ingest)
 	rdb := redisc.ParseURL(env("REDIS_URL", "redis://localhost:6379/0"))
 	noticeBase := env("NOTICE_BASE_URL", "http://bidder:8081")
-	noticeKey := env("NOTICE_SIGNING_KEY", "")
+	noticeKey := strings.TrimSpace(os.Getenv("NOTICE_SIGNING_KEY"))
+	if len(noticeKey) < 32 {
+		log.Fatal("NOTICE_SIGNING_KEY must be set and at least 32 bytes")
+	}
 
 	ctx := context.Background()
 	go pollSnapshot(ctx, rdb, hold, bud)
@@ -65,13 +68,16 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		n, avg, max, last := lat.Snapshot()
+		dropped, droppedBilling := logs.Dropped()
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(
 			`{"ok":true,"adapter":"` + ad.Name() +
 				`","bids":` + strconv.FormatUint(n, 10) +
 				`,"avg_decision_us":` + strconv.FormatUint(avg, 10) +
 				`,"max_decision_us":` + strconv.FormatUint(max, 10) +
-				`,"last_decision_us":` + strconv.FormatUint(last, 10) + `}`,
+				`,"last_decision_us":` + strconv.FormatUint(last, 10) +
+				`,"log_dropped":` + strconv.FormatUint(dropped, 10) +
+				`,"log_dropped_billing":` + strconv.FormatUint(droppedBilling, 10) + `}`,
 		))
 	})
 	mux.HandleFunc("/openrtb/v2/bid", func(w http.ResponseWriter, r *http.Request) {
@@ -131,15 +137,22 @@ func handleBid(w http.ResponseWriter, r *http.Request, ad adapter.SspAdapter, ho
 		return
 	}
 
+	impID := "1"
+	if len(req.Imp) > 0 && req.Imp[0].ID != "" {
+		impID = req.Imp[0].ID
+	}
+	// Notice URLs embed r/i unescaped; reject unsafe ids on the bid path.
+	if !notice.ValidID(req.ID) || !notice.ValidID(impID) {
+		writeNoBid(w, req.ID, 2, start)
+		reqPool.Put(req)
+		return
+	}
+
 	imp := ad.Normalize(req)
 	snap := hold.Load()
 	res := matcher.Match(snap, imp, time.Now().In(london), bud)
 
 	var notices matcher.NoticeURLs
-	impID := "1"
-	if len(req.Imp) > 0 && req.Imp[0].ID != "" {
-		impID = req.Imp[0].ID
-	}
 	if res.Campaign != nil {
 		cur := res.Campaign.Currency
 		if cur == "" {
@@ -204,13 +217,14 @@ func handleNotice(w http.ResponseWriter, r *http.Request, kind string, noticeKey
 				priceCPM = p
 			}
 		}
+		// Do not copy unverified campaign/advertiser ids from a failed notice.
 		logs.Log(logasync.Event{
 			EventType:     "notice_rejected",
 			BidRequestID:  params.BidRequestID,
 			ImpID:         params.ImpID,
-			AdvertiserID:  params.AdvertiserID,
-			CampaignID:    params.CampaignID,
-			CreativeID:    params.CreativeID,
+			AdvertiserID:  0,
+			CampaignID:    0,
+			CreativeID:    0,
 			QtyMultiplier: params.Multiplier,
 			PriceCPM:      priceCPM,
 			Currency:      params.Currency,

@@ -15,6 +15,7 @@ var (
 	ErrBadSignature  = errors.New("bad signature")
 	ErrBadPrice      = errors.New("bad price")
 	ErrPriceAboveBid = errors.New("price above bid")
+	ErrBadID         = errors.New("bad request or imp id")
 )
 
 // Params are the signed notice fields (everything except s and p).
@@ -27,6 +28,24 @@ type Params struct {
 	Multiplier   float64
 	BidCPM       float64
 	Currency     string
+}
+
+// ValidID reports whether s is safe to put unescaped in a notice query string:
+// 1..64 chars of [A-Za-z0-9._-].
+func ValidID(s string) bool {
+	if n := len(s); n == 0 || n > 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '.' || c == '_' || c == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // SpendMicros is the billing formula: round(price_cpm * multiplier * 1000).
@@ -98,12 +117,23 @@ func BuildURL(base, path, key string, p Params) string {
 	}
 }
 
-// ParseAndVerify checks signature and price. Returns params, clearing price, or an error.
+func priceOK(price float64) bool {
+	if math.IsNaN(price) || math.IsInf(price, 0) {
+		return false
+	}
+	// Reject zero and negative clearing prices; only a positive p may book.
+	return price > 0
+}
+
+// ParseAndVerify checks IDs, signature and price. Returns params, clearing price, or an error.
 func ParseAndVerify(key string, q url.Values) (Params, float64, error) {
 	p := Params{
 		BidRequestID: q.Get("r"),
 		ImpID:        q.Get("i"),
 		Currency:     q.Get("cur"),
+	}
+	if !ValidID(p.BidRequestID) || !ValidID(p.ImpID) {
+		return p, 0, ErrBadID
 	}
 	if a, err := strconv.ParseUint(q.Get("a"), 10, 32); err == nil {
 		p.AdvertiserID = uint32(a)
@@ -132,7 +162,7 @@ func ParseAndVerify(key string, q url.Values) (Params, float64, error) {
 		return p, 0, ErrBadPrice
 	}
 	price, err := strconv.ParseFloat(rawP, 64)
-	if err != nil {
+	if err != nil || !priceOK(price) {
 		return p, 0, ErrBadPrice
 	}
 	if price > p.BidCPM {

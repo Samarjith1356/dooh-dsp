@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -29,9 +30,11 @@ type Event struct {
 }
 
 type Writer struct {
-	ch     chan Event
-	ingest string
-	client *http.Client
+	ch             chan Event
+	ingest         string
+	client         *http.Client
+	dropped        atomic.Uint64
+	droppedBilling atomic.Uint64
 }
 
 func New(ingest string) *Writer {
@@ -58,7 +61,16 @@ func (w *Writer) Log(e Event) {
 	select {
 	case w.ch <- e:
 	default:
+		w.dropped.Add(1)
+		if e.EventType == "billing" {
+			w.droppedBilling.Add(1)
+		}
 	}
+}
+
+// Dropped returns how many events were dropped because the async queue was full.
+func (w *Writer) Dropped() (total, billing uint64) {
+	return w.dropped.Load(), w.droppedBilling.Load()
 }
 
 func (w *Writer) loop() {

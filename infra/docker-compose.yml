@@ -125,7 +125,7 @@ services:
       BIDDER_LISTEN: :8081
       INGEST_URL: http://ingest:8090/events
       NOTICE_BASE_URL: ${NOTICE_BASE_URL:-http://bidder:8081}
-      NOTICE_SIGNING_KEY: ${NOTICE_SIGNING_KEY:-dev-notice-key}
+      NOTICE_SIGNING_KEY: ${NOTICE_SIGNING_KEY:?NOTICE_SIGNING_KEY must be set}
     ports:
       - "8081:8081"
     depends_on:

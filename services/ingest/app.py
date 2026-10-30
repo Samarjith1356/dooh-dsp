@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -9,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 log = logging.getLogger("ingest")
@@ -22,6 +23,7 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", "10000"))
 FLUSH_SECONDS = float(os.getenv("FLUSH_SECONDS", "2"))
 DEDUPE_TTL_SECONDS = 48 * 60 * 60
+MONEY_EVENT_TYPES = frozenset({"billing"})
 
 app = FastAPI(title="DOOH ingest")
 _lock = threading.Lock()
@@ -50,6 +52,10 @@ class EventIn(BaseModel):
     snapshot_id: int = 0
 
 
+class DedupeUnavailable(Exception):
+    """Redis required for money-event dedupe is down."""
+
+
 def _redis_client():
     global _redis
     if _redis is not None:
@@ -57,12 +63,19 @@ def _redis_client():
     try:
         import redis
 
-        _redis = redis.from_url(REDIS_URL, decode_responses=True)
-        _redis.ping()
+        client = redis.from_url(REDIS_URL, decode_responses=True)
+        client.ping()
+        _redis = client
         return _redis
     except Exception as exc:  # noqa: BLE001
         log.warning("redis unavailable for dedupe: %s", exc)
         return None
+
+
+def reset_redis_state_for_tests() -> None:
+    """Test helper: clear cached redis client."""
+    global _redis
+    _redis = None
 
 
 def _ch_query(sql: str) -> None:
@@ -118,14 +131,34 @@ def _row(e: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _length_prefixed(parts: list[str]) -> bytes:
+    out = bytearray()
+    for part in parts:
+        raw = part.encode("utf-8")
+        out.extend(len(raw).to_bytes(4, "big"))
+        out.extend(raw)
+    return bytes(out)
+
+
+def dedupe_key(event_type: str, bid_request_id: str, imp_id: str) -> str:
+    """Hash of length-prefixed (event_type, bid_request_id, imp_id) so a:b/c ≠ a/b:c."""
+    digest = hashlib.sha256(
+        _length_prefixed([event_type, bid_request_id, imp_id])
+    ).hexdigest()
+    return f"ingest:dedupe:{digest}"
+
+
 def _is_duplicate(event_type: str, bid_request_id: str, imp_id: str) -> bool:
     global _duplicates_dropped
     if not event_type or not bid_request_id:
         return False
+    money = event_type in MONEY_EVENT_TYPES
     r = _redis_client()
     if r is None:
+        if money:
+            raise DedupeUnavailable("redis unavailable for billing dedupe")
         return False
-    key = f"ingest:dedupe:{event_type}:{bid_request_id}:{imp_id}"
+    key = dedupe_key(event_type, bid_request_id, imp_id)
     try:
         # SET NX — first writer wins; repeats within TTL are dropped.
         ok = r.set(key, "1", nx=True, ex=DEDUPE_TTL_SECONDS)
@@ -136,6 +169,8 @@ def _is_duplicate(event_type: str, bid_request_id: str, imp_id: str) -> bool:
         return True
     except Exception as exc:  # noqa: BLE001
         log.warning("dedupe check failed: %s", exc)
+        if money:
+            raise DedupeUnavailable(str(exc)) from exc
         return False
 
 
@@ -193,16 +228,22 @@ def enqueue(raw: dict[str, Any]) -> bool:
 
 @app.post("/events")
 def post_event(body: EventIn):
-    accepted = enqueue(body.model_dump())
+    try:
+        accepted = enqueue(body.model_dump())
+    except DedupeUnavailable as exc:
+        raise HTTPException(status_code=503, detail="dedupe unavailable") from exc
     return {"ok": True, "accepted": accepted}
 
 
 @app.post("/events/batch")
 def post_batch(body: list[EventIn]):
     n = 0
-    for item in body:
-        if enqueue(item.model_dump()):
-            n += 1
+    try:
+        for item in body:
+            if enqueue(item.model_dump()):
+                n += 1
+    except DedupeUnavailable as exc:
+        raise HTTPException(status_code=503, detail="dedupe unavailable") from exc
     return {"ok": True, "n": n}
 
 
@@ -230,7 +271,10 @@ def _kafka_loop() -> None:
             )
             for msg in consumer:
                 if isinstance(msg.value, dict):
-                    enqueue(msg.value)
+                    try:
+                        enqueue(msg.value)
+                    except DedupeUnavailable:
+                        log.warning("dropped kafka billing event: redis dedupe unavailable")
         except Exception as exc:  # noqa: BLE001
             log.warning("kafka ingest: %s", exc)
             time.sleep(3)
