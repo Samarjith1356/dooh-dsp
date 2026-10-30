@@ -13,6 +13,8 @@ CREATE TABLE IF NOT EXISTS rtb.events
     h3 UInt64,
     creative_id UInt32,
     bid_request_id String,
+    imp_id String,
+    currency LowCardinality(String),
     price_cpm Float32,
     qty_multiplier Float32,
     billable_imps Float32,

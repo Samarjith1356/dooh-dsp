@@ -2,7 +2,7 @@
 id: 003
 title: Book spend when an ad plays, not when we bid
 lane: trading
-status: building
+status: in-review
 depends_on: []
 extra_review: [security]
 branch: task/003-spend-on-billing
@@ -69,7 +69,55 @@ _None yet._
 ---
 
 ## Builder report
-_Filled in by Cursor._
+
+### Files changed
+- `services/bidder/internal/notice/notice.go` (+ tests): HMAC notice URL build/verify and billing spend formula
+- `services/bidder/cmd/bidder/main.go` (+ tests): signed nurl/burl/lurl on bids; `bid` events with zero spend; verified win/billing/loss/notice_rejected notices
+- `services/bidder/internal/matcher/matcher.go`, `marshal.go`: accept notice URLs; emit `lurl`
+- `services/bidder/internal/logasync/log.go`, `openrtb/types.go`: `imp_id`, `currency`, `LURL`
+- `services/ssp-simulator/main.go` (+ tests): SIM_WIN_RATE / SIM_PLAY_DELAY_MS / SIM_PLAY_DROP_RATE notice behaviour
+- `services/ingest/app.py` (+ `tests/`): new fields, Redis 48h dedupe, `duplicates_dropped` on `/health`, startup column migration with retry
+- `infra/clickhouse/init.sql`: `imp_id`, `currency` columns
+- `services/brain/app/pacing.py` (+ `tests/test_pacing.py`): remaining = cap − billed − open win exposure from `rtb.events`
+- `.env.example`, `infra/docker-compose.yml`: NOTICE_* and SIM_* env for bidder / ssp-simulator / ingest
+- `services/ingest/requirements.txt`: redis + pytest
+
+### Acceptance criteria
+- [x] Go/Python unit tests: `docker run … golang:1.23-alpine go test ./…` passed in bidder and ssp-simulator (Go not on host PATH). `pytest` in ingest: 3 passed. Brain: `tests/test_pacing.py` + `tests/test_compiler.py` 5 passed; full `pytest` still fails pre-existing `test_seed_architecture_idempotent` against local Postgres (memory `_load` prefers empty PG over `_local`) — not introduced here.
+- [x] Decision latency: before rebuild avg **44µs**; after (fresh bidder counters) avg **38µs** / last **31µs** (within +10µs).
+- [x] 10-minute window query:
+  ```
+  bid	10897	0
+  billing	6503	468671550
+  loss	4306	0
+  nobid	18197	0
+  notice_rejected	3	0
+  win	6593	0
+  ```
+  rates: win_rate≈0.605, play_rate≈0.982, other_spend=0.
+- [x] Bad signature / p>b → `notice_rejected`, spend 0:
+  ```
+  curl 'http://localhost:8081/burl?r=rej-sig&i=1&a=1&c=1&cr=9&q=5.2&b=10&cur=GBP&s=00000000000000000000000000000000&p=9'
+  curl 'http://localhost:8081/burl?r=rej-price&i=1&a=1&c=1&cr=9&q=5.2&b=10&cur=GBP&s=1e740daa0db36b85fd75fa7f86f4af29&p=10.01'
+  ```
+  CH: `notice_rejected rej-sig 0` and `notice_rejected rej-price 0`.
+- [x] Duplicate burl (`accept-dup`) booked once: one `billing` row spend=49400; ingest `duplicates_dropped` incremented.
+- [x] Budget falls with billing, not bids: Redis `budget:1:remaining_micros` T1=229024259 → T2=127760344 while bids continued; recent `bid` spend_micros sum stayed 0.
+
+### Tests
+- `cd services/bidder && go test ./...` — run via `docker run --rm -v … golang:1.23-alpine` because `go` is not installed on this PC PATH. **pass**
+- `cd services/ssp-simulator && go test ./...` — same Docker workaround. **pass**
+- `cd services/brain && PYTHONPATH=../../packages/ruleset/python pytest` — pacing+compiler pass; full suite blocked by pre-existing memory seed test (see above)
+- `cd services/ingest && pytest` — **pass** (3)
+- `docker compose -f infra/docker-compose.yml up -d --build` — bidder, ssp-simulator, ingest, brain rebuilt and exercised
+
+### Found along the way
+- Existing ClickHouse volumes need the ingest startup migration (or manual `ADD COLUMN`) before inserts with `imp_id`/`currency` succeed; migration now retries.
+- `test_seed_architecture_idempotent` is flaky/broken when Postgres is up but architecture recall returns empty.
+- Lifetime `/health` avg can be inflated by cold-start outliers after a restart; report steady counters after a short warmup.
+
+### Handbook or contract updates needed
+- None for the contract. Handbook could note spend-on-billing is live after this merges.
 
 ## Review
 _Filled in by Claude Code._

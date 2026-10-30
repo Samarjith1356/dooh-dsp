@@ -18,12 +18,16 @@ logging.basicConfig(level=logging.INFO)
 CLICKHOUSE_HOST = os.getenv("CLICKHOUSE_HOST", "localhost")
 CLICKHOUSE_HTTP_PORT = int(os.getenv("CLICKHOUSE_HTTP_PORT", "8123"))
 KAFKA_BROKERS = os.getenv("KAFKA_BROKERS", "localhost:19092")
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", "10000"))
 FLUSH_SECONDS = float(os.getenv("FLUSH_SECONDS", "2"))
+DEDUPE_TTL_SECONDS = 48 * 60 * 60
 
 app = FastAPI(title="DOOH ingest")
 _lock = threading.Lock()
 _buf: list[dict[str, Any]] = []
+_duplicates_dropped = 0
+_redis = None
 
 
 class EventIn(BaseModel):
@@ -37,11 +41,53 @@ class EventIn(BaseModel):
     h3: int = 0
     creative_id: int = 0
     bid_request_id: str = ""
+    imp_id: str = ""
+    currency: str = ""
     price_cpm: float = 0
     qty_multiplier: float = 1
     billable_imps: float = 0
     spend_micros: int = 0
     snapshot_id: int = 0
+
+
+def _redis_client():
+    global _redis
+    if _redis is not None:
+        return _redis
+    try:
+        import redis
+
+        _redis = redis.from_url(REDIS_URL, decode_responses=True)
+        _redis.ping()
+        return _redis
+    except Exception as exc:  # noqa: BLE001
+        log.warning("redis unavailable for dedupe: %s", exc)
+        return None
+
+
+def _ch_query(sql: str) -> None:
+    url = f"http://{CLICKHOUSE_HOST}:{CLICKHOUSE_HTTP_PORT}/"
+    resp = httpx.post(url, params={"query": sql}, timeout=10.0)
+    resp.raise_for_status()
+
+
+def migrate_schema() -> None:
+    stmts = [
+        "ALTER TABLE rtb.events ADD COLUMN IF NOT EXISTS imp_id String",
+        "ALTER TABLE rtb.events ADD COLUMN IF NOT EXISTS currency LowCardinality(String)",
+    ]
+    for attempt in range(1, 8):
+        ok = True
+        for sql in stmts:
+            try:
+                _ch_query(sql)
+                log.info("migration ok: %s", sql)
+            except Exception as exc:  # noqa: BLE001
+                ok = False
+                log.warning("migration attempt %s failed (%s): %s", attempt, sql, exc)
+        if ok:
+            return
+        time.sleep(min(2 * attempt, 10))
 
 
 def _row(e: dict[str, Any]) -> dict[str, Any]:
@@ -62,12 +108,35 @@ def _row(e: dict[str, Any]) -> dict[str, Any]:
         "h3": int(e.get("h3") or 0),
         "creative_id": int(e.get("creative_id") or 0),
         "bid_request_id": e.get("bid_request_id") or "",
+        "imp_id": e.get("imp_id") or "",
+        "currency": e.get("currency") or "",
         "price_cpm": float(e.get("price_cpm") or 0),
         "qty_multiplier": float(e.get("qty_multiplier") or 1),
         "billable_imps": float(e.get("billable_imps") or 0),
         "spend_micros": int(e.get("spend_micros") or 0),
         "snapshot_id": int(e.get("snapshot_id") or 0),
     }
+
+
+def _is_duplicate(event_type: str, bid_request_id: str, imp_id: str) -> bool:
+    global _duplicates_dropped
+    if not event_type or not bid_request_id:
+        return False
+    r = _redis_client()
+    if r is None:
+        return False
+    key = f"ingest:dedupe:{event_type}:{bid_request_id}:{imp_id}"
+    try:
+        # SET NX — first writer wins; repeats within TTL are dropped.
+        ok = r.set(key, "1", nx=True, ex=DEDUPE_TTL_SECONDS)
+        if ok:
+            return False
+        with _lock:
+            _duplicates_dropped += 1
+        return True
+    except Exception as exc:  # noqa: BLE001
+        log.warning("dedupe check failed: %s", exc)
+        return False
 
 
 def _flush(force: bool = False) -> None:
@@ -83,7 +152,7 @@ def _flush(force: bool = False) -> None:
     query = (
         "INSERT INTO rtb.events "
         "(event_date,event_time,event_type,advertiser_id,campaign_id,ssp,country,"
-        "venue_type,h3,creative_id,bid_request_id,price_cpm,qty_multiplier,"
+        "venue_type,h3,creative_id,bid_request_id,imp_id,currency,price_cpm,qty_multiplier,"
         "billable_imps,spend_micros,snapshot_id) FORMAT JSONEachRow"
     )
     try:
@@ -107,30 +176,42 @@ def _flusher() -> None:
         _flush(force=True)
 
 
-def enqueue(raw: dict[str, Any]) -> None:
+def enqueue(raw: dict[str, Any]) -> bool:
+    if _is_duplicate(
+        str(raw.get("event_type") or ""),
+        str(raw.get("bid_request_id") or ""),
+        str(raw.get("imp_id") or ""),
+    ):
+        return False
     with _lock:
         _buf.append(_row(raw))
         n = len(_buf)
     if n >= 1000:
         _flush(force=True)
+    return True
 
 
 @app.post("/events")
 def post_event(body: EventIn):
-    enqueue(body.model_dump())
-    return {"ok": True}
+    accepted = enqueue(body.model_dump())
+    return {"ok": True, "accepted": accepted}
 
 
 @app.post("/events/batch")
 def post_batch(body: list[EventIn]):
+    n = 0
     for item in body:
-        enqueue(item.model_dump())
-    return {"ok": True, "n": len(body)}
+        if enqueue(item.model_dump()):
+            n += 1
+    return {"ok": True, "n": n}
 
 
 @app.get("/health")
 def health():
-    return {"ok": True, "buffered": len(_buf)}
+    with _lock:
+        buffered = len(_buf)
+        dropped = _duplicates_dropped
+    return {"ok": True, "buffered": buffered, "duplicates_dropped": dropped}
 
 
 def _kafka_loop() -> None:
@@ -157,5 +238,6 @@ def _kafka_loop() -> None:
 
 @app.on_event("startup")
 def startup():
+    migrate_schema()
     threading.Thread(target=_flusher, daemon=True).start()
     threading.Thread(target=_kafka_loop, daemon=True).start()

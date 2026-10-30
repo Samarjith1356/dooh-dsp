@@ -16,16 +16,17 @@ import (
 	"github.com/dooh-dsp/bidder/internal/lat"
 	"github.com/dooh-dsp/bidder/internal/logasync"
 	"github.com/dooh-dsp/bidder/internal/matcher"
+	"github.com/dooh-dsp/bidder/internal/notice"
 	"github.com/dooh-dsp/bidder/internal/openrtb"
 	"github.com/dooh-dsp/bidder/internal/redisc"
 	"github.com/dooh-dsp/bidder/internal/snapshot"
 )
 
 var (
-	london     *time.Location
-	bodyPool   = sync.Pool{New: func() any { b := make([]byte, 0, 4096); return &b }}
-	respPool   = sync.Pool{New: func() any { b := make([]byte, 0, 1024); return &b }}
-	reqPool    = sync.Pool{New: func() any { return &openrtb.BidRequest{} }}
+	london   *time.Location
+	bodyPool = sync.Pool{New: func() any { b := make([]byte, 0, 4096); return &b }}
+	respPool = sync.Pool{New: func() any { b := make([]byte, 0, 1024); return &b }}
+	reqPool  = sync.Pool{New: func() any { return &openrtb.BidRequest{} }}
 )
 
 func init() {
@@ -44,6 +45,8 @@ func main() {
 	ingest := env("INGEST_URL", "http://localhost:8090/events")
 	logs := logasync.New(ingest)
 	rdb := redisc.ParseURL(env("REDIS_URL", "redis://localhost:6379/0"))
+	noticeBase := env("NOTICE_BASE_URL", "http://bidder:8081")
+	noticeKey := env("NOTICE_SIGNING_KEY", "")
 
 	ctx := context.Background()
 	go pollSnapshot(ctx, rdb, hold, bud)
@@ -72,16 +75,19 @@ func main() {
 		))
 	})
 	mux.HandleFunc("/openrtb/v2/bid", func(w http.ResponseWriter, r *http.Request) {
-		handleBid(w, r, ad, hold, bud, logs)
+		handleBid(w, r, ad, hold, bud, logs, noticeBase, noticeKey)
 	})
 	mux.HandleFunc("/nurl", func(w http.ResponseWriter, r *http.Request) {
-		handleNotice(w, r, "win", logs)
+		handleNotice(w, r, "win", noticeKey, logs)
 	})
 	mux.HandleFunc("/burl", func(w http.ResponseWriter, r *http.Request) {
-		handleNotice(w, r, "pop", logs)
+		handleNotice(w, r, "billing", noticeKey, logs)
+	})
+	mux.HandleFunc("/lurl", func(w http.ResponseWriter, r *http.Request) {
+		handleNotice(w, r, "loss", noticeKey, logs)
 	})
 
-	log.Printf("bidder adapter=%s listen=%s (decision budget <1ms)", ad.Name(), listen)
+	log.Printf("bidder adapter=%s listen=%s notice_base=%s (decision budget <1ms)", ad.Name(), listen, noticeBase)
 	srv := &http.Server{
 		Addr:              listen,
 		Handler:           mux,
@@ -95,7 +101,7 @@ func main() {
 	}
 }
 
-func handleBid(w http.ResponseWriter, r *http.Request, ad adapter.SspAdapter, hold *snapshot.Holder, bud *budget.Cache, logs *logasync.Writer) {
+func handleBid(w http.ResponseWriter, r *http.Request, ad adapter.SspAdapter, hold *snapshot.Holder, bud *budget.Cache, logs *logasync.Writer, noticeBase, noticeKey string) {
 	start := time.Now()
 	defer r.Body.Close()
 
@@ -128,7 +134,31 @@ func handleBid(w http.ResponseWriter, r *http.Request, ad adapter.SspAdapter, ho
 	imp := ad.Normalize(req)
 	snap := hold.Load()
 	res := matcher.Match(snap, imp, time.Now().In(london), bud)
-	resp := matcher.BuildResponse(req, ad, res)
+
+	var notices matcher.NoticeURLs
+	impID := "1"
+	if len(req.Imp) > 0 && req.Imp[0].ID != "" {
+		impID = req.Imp[0].ID
+	}
+	if res.Campaign != nil {
+		cur := res.Campaign.Currency
+		if cur == "" {
+			cur = "GBP"
+		}
+		np := notice.Params{
+			BidRequestID: req.ID,
+			ImpID:        impID,
+			AdvertiserID: res.Campaign.AdvertiserID,
+			CampaignID:   res.Campaign.ID,
+			CreativeID:   res.Creative.ID,
+			Multiplier:   res.Qty,
+			BidCPM:       res.Price,
+			Currency:     cur,
+		}
+		nurl, burl, lurl := notice.BuildURLs(noticeBase, noticeKey, np)
+		notices = matcher.NoticeURLs{NURL: nurl, BURL: burl, LURL: lurl}
+	}
+	resp := matcher.BuildResponse(req, ad, res, notices)
 	writeResp(w, resp, start)
 
 	evt := logasync.Event{
@@ -136,6 +166,7 @@ func handleBid(w http.ResponseWriter, r *http.Request, ad adapter.SspAdapter, ho
 		SSP:          ad.Name(),
 		Country:      imp.Country,
 		BidRequestID: req.ID,
+		ImpID:        impID,
 	}
 	if len(imp.VenueTypes) > 0 {
 		evt.VenueType = imp.VenueTypes[0]
@@ -151,15 +182,66 @@ func handleBid(w http.ResponseWriter, r *http.Request, ad adapter.SspAdapter, ho
 		evt.CreativeID = res.Creative.ID
 		evt.PriceCPM = res.Price
 		evt.QtyMultiplier = res.Qty
-		evt.BillableImps = res.Qty
-		evt.SpendMicros = res.SpendMicros
+		evt.Currency = res.Campaign.Currency
+		if evt.Currency == "" {
+			evt.Currency = "GBP"
+		}
+		// Bids never book spend; billing notices do.
+		evt.BillableImps = 0
+		evt.SpendMicros = 0
 	}
 	logs.Log(evt)
 	reqPool.Put(req)
 }
 
-func handleNotice(w http.ResponseWriter, r *http.Request, kind string, logs *logasync.Writer) {
-	logs.Log(logasync.Event{EventType: kind, BidRequestID: r.URL.Query().Get("id")})
+func handleNotice(w http.ResponseWriter, r *http.Request, kind string, noticeKey string, logs *logasync.Writer) {
+	q := r.URL.Query()
+	params, price, err := notice.ParseAndVerify(noticeKey, q)
+	if err != nil {
+		priceCPM := price
+		if priceCPM == 0 {
+			if p, perr := strconv.ParseFloat(q.Get("p"), 64); perr == nil {
+				priceCPM = p
+			}
+		}
+		logs.Log(logasync.Event{
+			EventType:     "notice_rejected",
+			BidRequestID:  params.BidRequestID,
+			ImpID:         params.ImpID,
+			AdvertiserID:  params.AdvertiserID,
+			CampaignID:    params.CampaignID,
+			CreativeID:    params.CreativeID,
+			QtyMultiplier: params.Multiplier,
+			PriceCPM:      priceCPM,
+			Currency:      params.Currency,
+			SpendMicros:   0,
+			BillableImps:  0,
+		})
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	evt := logasync.Event{
+		EventType:     kind,
+		BidRequestID:  params.BidRequestID,
+		ImpID:         params.ImpID,
+		AdvertiserID:  params.AdvertiserID,
+		CampaignID:    params.CampaignID,
+		CreativeID:    params.CreativeID,
+		QtyMultiplier: params.Multiplier,
+		Currency:      params.Currency,
+		PriceCPM:      price,
+		SpendMicros:   0,
+		BillableImps:  0,
+	}
+	if kind == "billing" {
+		evt.SpendMicros = notice.SpendMicros(price, params.Multiplier)
+		evt.BillableImps = params.Multiplier
+	}
+	if kind == "loss" {
+		evt.PriceCPM = 0
+	}
+	logs.Log(evt)
 	w.WriteHeader(http.StatusNoContent)
 }
 

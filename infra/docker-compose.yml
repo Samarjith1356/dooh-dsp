@@ -124,6 +124,8 @@ services:
       SSP_ADAPTER: ${SSP_ADAPTER:-simulator}
       BIDDER_LISTEN: :8081
       INGEST_URL: http://ingest:8090/events
+      NOTICE_BASE_URL: ${NOTICE_BASE_URL:-http://bidder:8081}
+      NOTICE_SIGNING_KEY: ${NOTICE_SIGNING_KEY:-dev-notice-key}
     ports:
       - "8081:8081"
     depends_on:
@@ -138,6 +140,9 @@ services:
     environment:
       BIDDER_URL: http://bidder:8081/openrtb/v2/bid
       QPS: "50"
+      SIM_WIN_RATE: ${SIM_WIN_RATE:-0.6}
+      SIM_PLAY_DELAY_MS: ${SIM_PLAY_DELAY_MS:-2000}
+      SIM_PLAY_DROP_RATE: ${SIM_PLAY_DROP_RATE:-0.02}
     depends_on:
       - bidder
 
@@ -149,11 +154,13 @@ services:
       KAFKA_BROKERS: redpanda:9092
       CLICKHOUSE_HOST: clickhouse
       CLICKHOUSE_HTTP_PORT: 8123
+      REDIS_URL: redis://redis:6379/0
     ports:
       - "8090:8090"
     depends_on:
       - redpanda
       - clickhouse
+      - redis
 
   agents:
     build:

@@ -19,6 +19,8 @@ type Event struct {
 	H3            uint64  `json:"h3"`
 	CreativeID    uint32  `json:"creative_id"`
 	BidRequestID  string  `json:"bid_request_id"`
+	ImpID         string  `json:"imp_id"`
+	Currency      string  `json:"currency"`
 	PriceCPM      float64 `json:"price_cpm"`
 	QtyMultiplier float64 `json:"qty_multiplier"`
 	BillableImps  float64 `json:"billable_imps"`

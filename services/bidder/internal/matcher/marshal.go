@@ -35,6 +35,10 @@ func AppendResponse(dst []byte, resp *openrtb.BidResponse) []byte {
 	dst = strconv.AppendQuote(dst, b.NURL)
 	dst = append(dst, `,"burl":`...)
 	dst = strconv.AppendQuote(dst, b.BURL)
+	if b.LURL != "" {
+		dst = append(dst, `,"lurl":`...)
+		dst = strconv.AppendQuote(dst, b.LURL)
+	}
 	dst = append(dst, `,"crid":`...)
 	dst = strconv.AppendQuote(dst, b.CrID)
 	dst = append(dst, `,"cid":`...)
