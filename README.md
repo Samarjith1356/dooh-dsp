@@ -1,3 +1,5 @@
+[![CI](https://github.com/Samarjith1356/dooh-dsp/actions/workflows/ci.yml/badge.svg)](https://github.com/Samarjith1356/dooh-dsp/actions/workflows/ci.yml)
+
 # DOOH DSP (UK & Ireland)
 
 Programmatic demand-side platform for Digital Out-of-Home. Campaign AI runs **off** the bid path. The Go bidder matches OpenRTB 2.6 DOOH requests against a compiled in-memory rules snapshot.
