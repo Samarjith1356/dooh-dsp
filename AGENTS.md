@@ -34,6 +34,7 @@ The `agents/` folder is product code: the runtime agents behind Sam's Desk and t
 - **Contracts.** Build against `contracts/`. If a contract is wrong, stop and ask. Never change one yourself.
 - **Scope.** Build what the task asks. Note anything else under "Found along the way".
 - **Learn from the log.** Before you start, read the rows in `docs/build-log.csv` for your area, mistakes and lessons first (`docs/build-log.md` shows how).
+- **Business logic needs Sam.** Build only the business rules the task states and Sam approved (D-014). If you need a rule about money, pricing, customers, approvals or compliance that the task doesn't state, set status `blocked` and ask. Build only tasks from `tasks/BACKLOG.md`: no extras.
 - **No hidden decisions.** If a product or architecture question is open, write it under Open questions, set status `blocked`, and stop.
 - **Honest numbers.** Never show placeholder, sampled or demo data as live totals. Demo mode is labelled on screen.
 - **Tests.** Run the task's commands. Anything touching money, compliance or the bid path needs a test. Never weaken or skip a test to get green.

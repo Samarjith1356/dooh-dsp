@@ -5,6 +5,7 @@ Build the task whose number Sam typed after the command, for example `/do-task 0
 1. Run `git fetch origin`. If a branch `task/<number>-*` exists on origin, check it out and pull. If not, check out `origin/main` and create `task/<number>-<short-name>`, using the branch name in the task file.
 2. Open `tasks/<number>-*.md` and check three things before going further:
    - The status is `ready` or `changes-requested`. Otherwise stop and tell Sam what it is.
+   - `sam_signoff` is `not-needed` or `approved`. If it says `needed`, stop: Sam hasn't approved the business rules yet (D-014).
    - Every task in `depends_on` shows status `merged` in `handbook/STATUS.md`. Otherwise stop and say which one is missing.
    - Note the `lane` and the "Files you may touch" list. You edit nothing outside them.
 3. If this is your first task in this repo, read `handbook/README.md` and the files it lists. Every time, read the rows in `docs/build-log.csv` for your area. Always read `AGENTS.md`, every contract and file under Context, and the code the task points to before you edit.

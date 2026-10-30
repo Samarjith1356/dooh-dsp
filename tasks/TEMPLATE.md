@@ -5,6 +5,7 @@ lane: trading | platform | experience | agents
 status: ready
 depends_on: []
 extra_review: []
+sam_signoff: not-needed | needed | approved YYYY-MM-DD
 branch: task/NNN-short-name
 written: YYYY-MM-DD
 ---
@@ -13,6 +14,9 @@ written: YYYY-MM-DD
 
 ## Why
 One paragraph: what is wrong or missing, and who notices.
+
+## Business rules
+_Every rule about money, pricing, customers, approvals or compliance in this task, in plain words Sam can check. Write "None" if the task has none. If there are any, `sam_signoff` must say `approved` before the status is `ready` (D-014)._
 
 ## Context
 - Contracts: `contracts/...`

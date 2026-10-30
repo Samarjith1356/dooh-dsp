@@ -63,6 +63,10 @@ Every backlog item gets a priority:
 Within P0, work with outside lead time goes first, because the supply side sets the launch date. That means anything an SSP will check when certifying us: spend on billing notices, creative approval per partner, signed notices and latency. Next come accounts and the wallet, which everything customer-facing depends on, then the Irish compliance gate. The rename of `services/brain` to `services/compiler` is P2 and moves out of task 005. It touches every lane, pauses all builders and changes nothing a customer or an SSP sees. Task 005 keeps only the EUR work.
 Why: three builders can produce more than one reviewer can check, so the order of work matters more than its speed. Building P0 first means that if time runs short, what's missing is polish, not something go-live needs.
 
+**D-014 · Sam signs off business logic before it is built; only backlog work gets built** (30 Oct 2026, Sam)
+Business logic means any rule about money, pricing, fees, refunds, budgets, what an advertiser may do, what is approved or blocked, compliance policy, or what a customer sees as a promise. A task that contains business logic lists those rules in plain words under "Business rules" and carries `sam_signoff: needed`. It only becomes `ready` once Sam has approved the rules (`sam_signoff: approved`, with the date). Builders stop if they find a business rule the task doesn't state. Agents build only tasks from `tasks/BACKLOG.md`. Nothing off-list, no extras, no gold-plating.
+Why: Sam is accountable for how the company treats customers and money. AI agents should build fast, but they must not invent policy.
+
 ## Open (Sam to answer)
 
 **O-4 · Repo visibility.** This repo is public, including the bidding logic and the compliance rulebook. Proposed: make it private and move it to a company GitHub Organization, with the co-founder added as a collaborator. Until then, commercial details stay out of the repo.
