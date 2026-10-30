@@ -1,45 +1,39 @@
 # cursor-bridge
 
-A small connector that lets Claude (in the Claude desktop app) start Cursor agents on this PC, check on them and read their output. It's how the planner hands work orders to the Cursor builders without anyone copying and pasting.
+Lets Claude (in the Claude desktop app, chat or Cowork) start and watch Cursor CLI agents on this PC.
 
-## What it can and can't do
+Every Cursor agent works in its own git worktree in `..\dooh-dsp-worktrees\`, so your own working copy is never touched. Each job keeps a log in `.cursor-bridge\jobs\<job id>\output.log`.
 
-- It works only inside this repo (`DOOH_REPO`).
-- Every agent runs in its own git worktree under `<repo>-worktrees\`, so your own working copy and uncommitted changes are never touched.
-- At most 3 agents run at once (`BRIDGE_MAX_JOBS`). Each is stopped after 90 minutes (`BRIDGE_JOB_TIMEOUT_MIN`).
-- Logs live in `<repo>\.cursor-bridge\jobs\<job>\output.log`, which git ignores locally.
-- Commits are made on this PC with your git identity, and `.githooks/commit-msg` strips AI attribution lines.
-- It runs the Cursor CLI with `--force`, so the agent can edit files and run commands inside its worktree. That is how it builds.
+## Install (once)
 
-## Tools Claude gets
+1. Double-click `setup.cmd`. It:
+   - installs the Cursor CLI if needed,
+   - turns on the repo's commit hook,
+   - removes the old connector entry from earlier attempts,
+   - logs the Cursor CLI in (approve it in the browser),
+   - opens Claude's installer for `cursor-bridge.mcpb`.
+2. In Claude, click **Install** and check that the repo folder is your `dooh-dsp` clone.
+3. Tell Claude: "extension installed".
+
+If the installer doesn't open, go to Claude **Settings > Extensions > Advanced settings > Install Extension** and pick `tools\cursor-bridge\cursor-bridge.mcpb`.
+
+## What Claude can do with it
 
 | Tool | What it does |
 |---|---|
-| `cursor_check` | Health check: Cursor CLI, login, git, running jobs |
-| `cursor_start_task` | Start an agent on `tasks/NNN-*.md`, following `.cursor/commands/do-task.md` |
-| `cursor_start` | Start an agent with a free-form instruction |
-| `cursor_status` | List jobs, or show one job and its latest output |
-| `cursor_output` | Read more of a job's output |
-| `cursor_stop` | Stop a job |
-| `cursor_remove_worktree` | Clean up a finished job's worktree |
+| `cursor_check` | Health check: repo, Cursor CLI, login, running jobs. `probe` runs a one-line test prompt. |
+| `cursor_login` | Starts the Cursor CLI login and returns the link. |
+| `cursor_start_task` | Starts a Cursor agent on `tasks/NNN-*.md`, following `.cursor/commands/do-task.md`. |
+| `cursor_start` | Starts a Cursor agent with a free-form prompt. |
+| `cursor_status` | Lists jobs, or shows one job with its recent log. |
+| `cursor_output` | Reads more of a job's log. |
+| `cursor_stop` | Stops a running job. |
+| `cursor_remove_worktree` | Removes a finished job's worktree. Refuses if there is unpushed work. |
 
-## Setup (once)
+At most 3 agents run at once (change it in the extension's settings). A job is stopped after 90 minutes.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File "$HOME\dooh-dsp\tools\cursor-bridge\setup.ps1"
-```
+## Notes
 
-The script installs the Cursor CLI if it's missing, finds Python, turns on the commit hook, adds `cursor-bridge` to the Claude desktop config (keeping a backup), logs the CLI in, and runs a health check. Afterwards, fully quit and reopen Claude.
-
-It uses only the Python standard library. There is nothing to `pip install`.
-
-## Settings (environment variables in the Claude config entry)
-
-| Variable | Default |
-|---|---|
-| `DOOH_REPO` | The repo two folders above this file |
-| `CURSOR_AGENT_PATH` | Found automatically |
-| `CURSOR_AGENT_FLAGS` | `-p --trust --force --output-format text` |
-| `BRIDGE_WORKTREES` | `<repo>-worktrees` |
-| `BRIDGE_MAX_JOBS` | `3` |
-| `BRIDGE_JOB_TIMEOUT_MIN` | `90` |
+- Agents run with `--trust --force`: they can edit files and run commands inside their worktree without asking. Branch protection and review on GitHub are the safety net.
+- If Claude restarts while a job runs, the Cursor agent keeps going. The job shows `unsupervised` until it ends.
+- To rebuild the extension: `npx -y @anthropic-ai/mcpb pack <folder with manifest.json and server/>`.

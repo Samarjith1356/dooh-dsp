@@ -1,0 +1,67 @@
+{
+  "manifest_version": "0.3",
+  "name": "cursor-bridge",
+  "display_name": "Cursor Bridge (dooh-dsp)",
+  "version": "0.2.0",
+  "description": "Lets Claude start and monitor Cursor CLI agents on this PC, each in its own git worktree of the dooh-dsp repo.",
+  "long_description": "Starts headless Cursor agents for task files in the dooh-dsp repo. Every agent runs in a separate git worktree next to the repo, so your own working copy is never touched. Jobs run in the background with a log each; Claude can check status, read output, stop a job and clean up worktrees. Requires the Cursor CLI (agent) to be installed and logged in.",
+  "author": {
+    "name": "Samarjit Kabadi"
+  },
+  "server": {
+    "type": "node",
+    "entry_point": "server/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server/index.js"],
+      "env": {
+        "DOOH_REPO": "${user_config.repo}",
+        "CURSOR_AGENT_PATH": "${user_config.cursor_agent_path}",
+        "BRIDGE_MAX_JOBS": "${user_config.max_jobs}"
+      }
+    }
+  },
+  "user_config": {
+    "repo": {
+      "type": "directory",
+      "title": "dooh-dsp repo folder",
+      "description": "Your local clone of the dooh-dsp repo. Cursor agents work in git worktrees created next to it.",
+      "default": "${HOME}/dooh-dsp",
+      "required": true
+    },
+    "cursor_agent_path": {
+      "type": "string",
+      "title": "Cursor CLI path (optional)",
+      "description": "Leave blank to find it automatically. Only set this if the Cursor CLI lives somewhere unusual.",
+      "default": "",
+      "required": false
+    },
+    "max_jobs": {
+      "type": "number",
+      "title": "Max parallel Cursor agents",
+      "description": "How many Cursor agents may run at once.",
+      "default": 3,
+      "min": 1,
+      "max": 6,
+      "required": false
+    }
+  },
+  "tools": [
+    {"name": "cursor_check", "description": "Health check of the repo, Cursor CLI and login, with an optional test prompt."},
+    {"name": "cursor_login", "description": "Start the Cursor CLI login and return the approval link."},
+    {"name": "cursor_start_task", "description": "Start a Cursor agent on a task file in its own git worktree."},
+    {"name": "cursor_start", "description": "Start a Cursor agent with a free-form prompt in its own git worktree."},
+    {"name": "cursor_status", "description": "List jobs or show one job's status and recent log."},
+    {"name": "cursor_output", "description": "Read the last lines of a job's output."},
+    {"name": "cursor_stop", "description": "Stop a running job."},
+    {"name": "cursor_remove_worktree", "description": "Remove a finished job's worktree."}
+  ],
+  "keywords": ["cursor", "git", "worktree", "agents"],
+  "license": "UNLICENSED",
+  "compatibility": {
+    "platforms": ["win32", "darwin", "linux"],
+    "runtimes": {
+      "node": ">=16.0.0"
+    }
+  }
+}
