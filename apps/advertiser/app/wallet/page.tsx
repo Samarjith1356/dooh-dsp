@@ -16,6 +16,9 @@ export default function WalletPage() {
   const [wallet, setWallet] = useState<Wallet | null>(null);
   const [amount, setAmount] = useState(50);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const amountInvalid = !Number.isFinite(amount) || amount <= 0;
 
   useEffect(() => {
     if (loading) return;
@@ -29,9 +32,16 @@ export default function WalletPage() {
 
   async function topUp() {
     if (!api) return;
+    if (amountInvalid) {
+      setError("Top-up amount must be greater than zero.");
+      return;
+    }
     setBusy(true);
+    setError("");
     try {
       setWallet(await api.topUp({ micros: eurosToMicros(amount), currency: "EUR" }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Top-up failed");
     } finally {
       setBusy(false);
     }
@@ -61,15 +71,28 @@ export default function WalletPage() {
               Amount (EUR)
               <Input
                 type="number"
-                min={10}
+                min={1}
                 value={amount}
-                onChange={(e) => setAmount(Number(e.target.value))}
+                onChange={(e) => {
+                  setAmount(Number(e.target.value));
+                  setError("");
+                }}
                 data-testid="topup-amount"
               />
             </label>
-            <Button type="button" onClick={() => void topUp()} disabled={busy} data-testid="topup-submit">
+            <Button
+              type="button"
+              onClick={() => void topUp()}
+              disabled={busy || amountInvalid}
+              data-testid="topup-submit"
+            >
               {busy ? "Adding…" : "Add demo funds"}
             </Button>
+            {error ? (
+              <p role="alert" className="text-sm text-destructive" data-testid="topup-error">
+                {error}
+              </p>
+            ) : null}
             <p className="text-sm text-muted-foreground">{BIDDING_EXPLAINER}</p>
           </CardContent>
         </Card>

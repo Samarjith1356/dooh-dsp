@@ -80,39 +80,136 @@ test.describe("Advertiser App smoke", () => {
     expect(videoCheck.ok).toBe(false);
     expect(videoCheck.problems.join(" ")).toMatch(/20s|15 seconds/i);
 
+    const unreadableVideo = await page.evaluate(async () => {
+      const api = (window as Window & { __advertiserApi?: { uploadCreative: Function } }).__advertiserApi;
+      if (!api) throw new Error("mock api not exposed");
+      return api.uploadCreative({
+        filename: "broken.mp4",
+        mime: "video/mp4",
+      });
+    });
+    expect(unreadableVideo.ok).toBe(false);
+    expect(unreadableVideo.problems.join(" ")).toMatch(/Could not read video duration/i);
+    expect(unreadableVideo.problems.join(" ")).toMatch(/Could not read video dimensions/i);
+
     const goodPng = await pngFile(page, 1920, 1080, "ok-1920x1080.png");
     await page.getByTestId("creative-file").setInputFiles(goodPng);
     await expect(page.getByTestId("creative-result")).toContainText(/Accepted/i);
   });
 
-  test("alcohol category shows refusal and blocks campaign creation", async ({ page }) => {
-    await page.goto("/signup");
-    await page.evaluate(() => {
+  for (const category of ["alcohol", "gambling", "political"] as const) {
+    test(`${category} category shows refusal on profile`, async ({ page }) => {
+      await page.goto("/signup");
+      await page.evaluate(() => {
+        try {
+          window.localStorage.clear();
+        } catch {
+          /* ignore */
+        }
+      });
+      await page.getByTestId("signup-email").fill(`${category}-${Date.now()}@example.com`);
+      await page.getByTestId("signup-password").fill("secret12");
+      await page.getByTestId("signup-submit").click();
+      await page.waitForURL("**/profile");
+      await page.getByTestId("profile-name").fill("Refused Demo");
+      await page.getByTestId("profile-category").selectOption(category);
+      await expect(page.getByTestId("category-refusal")).toBeVisible();
+      await expect(page.getByTestId("profile-submit")).toBeDisabled();
+    });
+  }
+
+  test("mock hook refused category blocks Home and createCampaign", async ({ page }) => {
+    const email = `refuse-hook-${Date.now()}@example.com`;
+    await signUpAndProfile(page, email, "cafe");
+    await expect(page.getByTestId("new-campaign")).toBeVisible();
+
+    await page.evaluate(async () => {
+      const api = (
+        window as Window & {
+          __advertiserApi?: {
+            updateProfile: (input: {
+              name: string;
+              category: string;
+              lat: number;
+              lng: number;
+              address: string;
+            }) => Promise<unknown>;
+            createCampaign: (input: unknown) => Promise<unknown>;
+          };
+        }
+      ).__advertiserApi;
+      if (!api) throw new Error("mock api not exposed");
+      await api.updateProfile({
+        name: "Hook Refuse",
+        category: "alcohol",
+        lat: 53.3498,
+        lng: -6.2603,
+        address: "Dublin",
+      });
+    });
+
+    await page.reload();
+    await expect(page.getByTestId("home-category-block")).toBeVisible();
+    await expect(page.getByTestId("new-campaign")).toHaveCount(0);
+
+    const createError = await page.evaluate(async () => {
+      const api = (
+        window as Window & {
+          __advertiserApi?: {
+            createCampaign: (input: {
+              name: string;
+              goal: string;
+              screen_ids: string[];
+              start: string;
+              end: string;
+              dayparts: string[];
+              budget: { micros: number; currency: "EUR" };
+            }) => Promise<unknown>;
+          };
+        }
+      ).__advertiserApi;
+      if (!api) throw new Error("mock api not exposed");
       try {
-        window.localStorage.clear();
-      } catch {
-        /* ignore */
+        await api.createCampaign({
+          name: "Should fail",
+          goal: "footfall",
+          screen_ids: ["scr-grafton"],
+          start: "2026-11-01",
+          end: "2026-11-07",
+          dayparts: ["lunch"],
+          budget: { micros: 100_000_000, currency: "EUR" },
+        });
+        return null;
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
       }
     });
-    await page.getByTestId("signup-email").fill(`alcohol-${Date.now()}@example.com`);
-    await page.getByTestId("signup-password").fill("secret12");
-    await page.getByTestId("signup-submit").click();
-    await page.waitForURL("**/profile");
-    await page.getByTestId("profile-name").fill("Pub Demo");
-    await page.getByTestId("profile-category").selectOption("alcohol");
-    await expect(page.getByTestId("category-refusal")).toBeVisible();
-    await expect(page.getByTestId("profile-submit")).toBeDisabled();
+    expect(createError).toMatch(/alcohol|can't run|cannot|refuse/i);
+  });
 
-    await page.getByTestId("profile-category").selectOption("cafe");
-    await expect(page.getByTestId("category-refusal")).toHaveCount(0);
-    await page.getByTestId("profile-submit").click();
-    await page.waitForURL("**/home");
+  test("wallet rejects non-positive top-up", async ({ page }) => {
+    const email = `wallet-${Date.now()}@example.com`;
+    await signUpAndProfile(page, email);
+    await page.goto("/wallet");
+    await expect(page.getByTestId("wallet-balance")).toBeVisible();
 
-    // Simulate refused category after profile save by editing profile
-    await page.goto("/profile");
-    await page.getByTestId("profile-category").selectOption("gambling");
-    await expect(page.getByTestId("category-refusal")).toBeVisible();
-    await expect(page.getByTestId("profile-submit")).toBeDisabled();
+    await page.getByTestId("topup-amount").fill("0");
+    await expect(page.getByTestId("topup-submit")).toBeDisabled();
+
+    await page.getByTestId("topup-amount").fill("-10");
+    await expect(page.getByTestId("topup-submit")).toBeDisabled();
+
+    const thrown = await page.evaluate(async () => {
+      const api = (window as Window & { __advertiserApi?: { topUp: Function } }).__advertiserApi;
+      if (!api) throw new Error("mock api not exposed");
+      try {
+        await api.topUp({ micros: 0, currency: "EUR" });
+        return null;
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+    });
+    expect(thrown).toMatch(/greater than zero/i);
   });
 
   test("demo banner and AI label; layout at 375px", async ({ page }) => {

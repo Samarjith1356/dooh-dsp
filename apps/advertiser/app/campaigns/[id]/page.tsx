@@ -174,7 +174,9 @@ export default function CampaignPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Screens played</CardTitle>
+            <CardTitle>
+              {campaign.status === "live" || campaign.status === "finished" ? "Screens played" : "Selected screens"}
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <ScreenMap screens={screens} selectedIds={campaign.screen_ids} center={center} interactive={false} />

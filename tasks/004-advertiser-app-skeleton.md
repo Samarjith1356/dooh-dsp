@@ -2,7 +2,7 @@
 id: 004
 title: Advertiser App skeleton, every screen working on demo data
 lane: experience
-status: building
+status: in-review
 depends_on: []
 extra_review: []
 branch: task/004-advertiser-app-skeleton
@@ -78,10 +78,10 @@ _None yet._
 - `apps/advertiser/README.md` — how to run and how to switch to the live API later
 
 ### Acceptance criteria
-- [x] `npm run build` and `npm run test:e2e` pass — build green; 4 Playwright tests passed
+- [x] `npm run build` and `npm run test:e2e` pass — build green; 8 Playwright tests passed
 - [x] Every screen reachable from Home; finishing wizard adds campaign — `sign-up, full new campaign, appears on Home`
-- [x] Creative check rejects 1000×1000 and 20s video, accepts 1920×1080 PNG — `creative check rejects bad image and long video; accepts 1920x1080`
-- [x] Alcohol/gambling/political refused and campaign blocked — `alcohol category shows refusal…` (same refused list for gambling/political)
+- [x] Creative check rejects 1000×1000 and 20s video, accepts 1920×1080 PNG — `creative check rejects bad image and long video; accepts 1920x1080` (also unreadable duration/size)
+- [x] Alcohol/gambling/political refused and campaign blocked — looped profile refusal tests + `mock hook refused category blocks Home and createCampaign`
 - [x] Estimate shown as range and updates with budget — asserted in smoke (`Estimated plays` with `–`, range changes after budget 200→400)
 - [x] Demo banner on every screen in mock; Assistant labelled AI — `demo banner and AI label; layout at 375px`
 - [x] Layout at 375px and 1280px; no horizontal scroll at 375px — same test
@@ -91,14 +91,28 @@ _None yet._
 ```
 cd apps/advertiser && npm install && npm run build && npm run test:e2e
 ```
-Result: build succeeded; `4 passed` (Playwright chromium).
+Result: build succeeded (Next.js 15.5.28); `8 passed` (Playwright chromium). `npm audit --omit=dev` → 0 vulnerabilities.
 
 ### Found along the way
-- `next@15.1.3` npm warn about a published CVE; matched `apps/web` on purpose. Planner may want a shared bump later.
 - Live API path intentionally throws until Platform ships endpoints.
+- next@15.5.28 still nested an old postcss; `overrides.next.postcss` to 8.5.32 cleared the high audit without leaving 15.x. Do not touch `apps/web` here.
 
 ### Handbook or contract updates needed
 - After merge: note Advertiser App exists at `apps/advertiser` (port 3001, mock-first) in STATUS / architecture handbook.
+- Consider bumping `apps/web` next separately to 15.5.28 + postcss override.
+
+### Review round 1 fixes
+1. `mock.ts` `topUp` throws when `amount.micros <= 0`; wallet page shows `topup-error`, disables submit when amount ≤ 0. Evidence: `wallet rejects non-positive top-up`.
+2. Bumped `next` to `15.5.28`, regenerated lockfile, added `overrides.next.postcss` to `8.5.32`. `npm audit --omit=dev` shows 0 vulnerabilities. Did not touch `apps/web`.
+3. `checkCreative` rejects videos with missing/non-finite duration or dimensions with clear messages. Evidence: same creative test asserts both “Could not read video duration” and “Could not read video dimensions”.
+4. Profile refusal e2e loops alcohol/gambling/political. New test sets refused category via `__advertiserApi.updateProfile`, confirms `home-category-block` and `createCampaign` rejects.
+5. Campaign page title is “Selected screens” unless status is `live` or `finished` (then “Screens played”).
+6. Left wallet charge timing/estimate/category/creative rules unchanged; added `// Pending Sam sign-off (D-014)` next to wallet deduction in `submitCampaign`.
+
+### Log entries
+- mistake | experience | Initial next pin matched apps/web CVE; review forced bump to 15.5.28 + postcss override. Lesson: pin latest patched 15.x and check `npm audit --omit=dev` before in-review.
+- win | experience | Review round 1: 5 fixes + e2e coverage, 8/8 green after rebase path.
+- risk | experience | Wallet deduction on submit still pending Sam (D-014); demo only.
 
 ## Review
 _Filled in by Claude Code._

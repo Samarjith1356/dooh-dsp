@@ -262,13 +262,18 @@ function checkCreative(meta: CreativeUploadMeta): CreativeCheck {
   const isVideo = meta.mime.startsWith("video/") || /\.(mp4|webm|mov)$/i.test(meta.filename);
 
   if (isVideo) {
-    const duration = meta.duration_s ?? 0;
-    if (duration > 15) {
-      problems.push(`Video is ${duration}s. Maximum length is 15 seconds.`);
+    if (meta.duration_s == null || !Number.isFinite(meta.duration_s)) {
+      problems.push("Could not read video duration. Re-export the file or pick another video.");
+    } else if (meta.duration_s > 15) {
+      problems.push(`Video is ${meta.duration_s}s. Maximum length is 15 seconds.`);
     }
-    if (meta.width === 1920 && meta.height === 1080) format = "landscape_1920x1080";
-    else if (meta.width === 1080 && meta.height === 1920) format = "portrait_1080x1920";
-    else if (meta.width && meta.height) {
+    if (meta.width == null || meta.height == null || !Number.isFinite(meta.width) || !Number.isFinite(meta.height)) {
+      problems.push("Could not read video dimensions. Re-export the file or pick another video.");
+    } else if (meta.width === 1920 && meta.height === 1080) {
+      format = "landscape_1920x1080";
+    } else if (meta.width === 1080 && meta.height === 1920) {
+      format = "portrait_1080x1920";
+    } else {
       problems.push(`Video size ${meta.width}×${meta.height} is not supported. Use 1920×1080 or 1080×1920.`);
     }
   } else {
@@ -440,6 +445,7 @@ export function createMockClient(): ApiClient {
       };
       store.campaigns = [...store.campaigns];
       store.campaigns[idx] = updated;
+      // Pending Sam sign-off (D-014)
       if (verdict === "pass" && store.wallet.balance.micros >= updated.budget.micros) {
         store.wallet = {
           ...store.wallet,
@@ -478,6 +484,9 @@ export function createMockClient(): ApiClient {
 
     async topUp(amount: Money) {
       store = loadStore();
+      if (!Number.isFinite(amount.micros) || amount.micros <= 0) {
+        throw new Error("Top-up amount must be greater than zero.");
+      }
       store.wallet = {
         balance: {
           micros: store.wallet.balance.micros + amount.micros,
