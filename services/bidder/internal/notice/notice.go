@@ -34,10 +34,6 @@ func SpendMicros(priceCPM, multiplier float64) int64 {
 	return int64(math.Round(priceCPM * multiplier * 1000.0))
 }
 
-func formatFloat(v float64) string {
-	return strconv.FormatFloat(v, 'f', -1, 64)
-}
-
 func appendCanonical(dst []byte, p Params) []byte {
 	dst = append(dst, "r="...)
 	dst = append(dst, p.BidRequestID...)
