@@ -2,7 +2,7 @@
 id: 003
 title: Book spend when an ad plays, not when we bid
 lane: trading
-status: ready
+status: building
 depends_on: []
 extra_review: [security]
 branch: task/003-spend-on-billing
