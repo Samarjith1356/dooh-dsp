@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "cursor-bridge",
   "display_name": "Cursor Bridge (dooh-dsp)",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Lets Claude start and monitor Cursor CLI agents on this PC, each in its own git worktree of the dooh-dsp repo.",
   "long_description": "Starts headless Cursor agents for task files in the dooh-dsp repo. Every agent runs in a separate git worktree next to the repo, so your own working copy is never touched. Jobs run in the background with a log each; Claude can check status, read output, stop a job and clean up worktrees. Requires the Cursor CLI (agent) to be installed and logged in.",
   "author": {

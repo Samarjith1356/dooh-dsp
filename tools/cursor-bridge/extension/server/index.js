@@ -13,10 +13,22 @@ const path = require('path');
 const cp = require('child_process');
 const readline = require('readline');
 
-const VERSION = '0.2.0';
+const VERSION = '0.2.1';
 const IS_WIN = process.platform === 'win32';
 const env = (k, d) => (process.env[k] && process.env[k].trim()) || d;
-const REPO = path.resolve(env('DOOH_REPO', path.join(os.homedir(), 'dooh-dsp')));
+// If the configured folder is inside the repo (say its tools folder), walk up to the repo root.
+function repoRoot(p) {
+  let dir = path.resolve(p);
+  for (let i = 0; i < 8; i++) {
+    if (fs.existsSync(path.join(dir, '.git'))) return dir;
+    const up = path.dirname(dir);
+    if (up === dir) break;
+    dir = up;
+  }
+  return path.resolve(p);
+}
+const REPO_CONFIGURED = path.resolve(env('DOOH_REPO', path.join(os.homedir(), 'dooh-dsp')));
+const REPO = repoRoot(REPO_CONFIGURED);
 const WORKTREES = path.resolve(env('BRIDGE_WORKTREES', REPO + '-worktrees'));
 const BRIDGE_DIR = path.join(REPO, '.cursor-bridge');
 const JOBS = path.join(BRIDGE_DIR, 'jobs');
@@ -180,6 +192,7 @@ async function toolCheck({ probe = false } = {}) {
   const agent = findAgent();
   const info = {
     bridge_version: VERSION, node: process.version, repo: REPO,
+    ...(REPO !== REPO_CONFIGURED ? { repo_configured: REPO_CONFIGURED } : {}),
     repo_exists: fs.existsSync(path.join(REPO, '.git')),
     worktrees_dir: WORKTREES, max_parallel_jobs: MAX_JOBS, job_timeout_minutes: TIMEOUT_MIN,
     agent_flags: AGENT_FLAGS,
