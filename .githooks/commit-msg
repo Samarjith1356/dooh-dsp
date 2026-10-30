@@ -1,0 +1,8 @@
+#!/bin/sh
+# Removes AI attribution lines so Sam stays the sole author of every commit.
+# Turn on once per clone:  git config core.hooksPath .githooks
+msg="$1"
+tmp="$msg.tmp"
+grep -viE 'co-authored-by:.*(cursor|claude|anthropic|copilot|openai|grok|x\.ai)|^made-with:|generated with .*(claude|cursor)|^claude-session:' "$msg" > "$tmp"
+mv "$tmp" "$msg"
+exit 0

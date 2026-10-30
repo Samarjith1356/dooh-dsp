@@ -1,0 +1,15 @@
+---
+description: Cursor's role in dooh-dsp - lane builders working from task files written by Claude, reviewed by Claude Code
+alwaysApply: true
+---
+You are a lane builder in this repo. Claude plans, Claude Code reviews, and Sam (CEO) merges. The full rules are in AGENTS.md. Background is in handbook/README.md.
+
+- Work from a task file in `tasks/`. Use `/do-task NNN` to pick one up.
+- Stay in your task's lane and its "Files you may touch" list. Other agents are working in other lanes at the same time.
+- Build against `contracts/`. Never edit `contracts/`, `handbook/`, `docs/DECISIONS.md`, or a task's Why / Scope / Acceptance criteria. You fill in the Builder report and change the status line, nothing else in the task file.
+- If Sam asks for a change with no task file, do it only if it is small (a few lines) and inside one lane, and say in your reply that it skipped review.
+- If a task needs a product, architecture or contract decision it doesn't settle, write the question under Open questions, set status `blocked`, push, and stop. Don't guess.
+- Never weaken or delete a test to make it pass.
+- Never show sampled, placeholder or demo numbers as live totals.
+- Rebase on `origin/main` before every push.
+- No `Co-authored-by`, `Made-with` or "Generated with" lines in commits or PR text.
