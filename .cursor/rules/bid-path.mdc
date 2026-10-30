@@ -1,0 +1,12 @@
+---
+description: Extra rules for the Go bidder hot path
+globs: services/bidder/**
+alwaysApply: false
+---
+This is the bid path. Decision time (the `X-DSP-Decision-Us` response header) must stay under 1000µs. The average today is about 41µs.
+
+- Request handling gets its data from the in-memory snapshot and the budget cache only. Add no new network calls, DB clients, disk reads or LLM calls there.
+- Log through the existing async logger (`internal/logasync`). Never log in a way that blocks.
+- Follow the existing low-allocation patterns (see `internal/openrtb/fast.go`). Don't add per-request allocations they avoid.
+- Every change here needs `go test ./...` to pass. If it touches matching, pricing or budget, add a case to `internal/matcher/matcher_test.go`.
+- In the Builder report, give the avg and max decision time from `/health` before and after the change.
