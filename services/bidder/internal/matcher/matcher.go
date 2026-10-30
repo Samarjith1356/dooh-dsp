@@ -121,7 +121,14 @@ func creativeOK(c *snapshot.Campaign, wh uint64, w, h int) *snapshot.CreativeRef
 	return nil
 }
 
-func BuildResponse(req *openrtb.BidRequest, ad adapter.SspAdapter, r Result) *openrtb.BidResponse {
+// NoticeURLs carries pre-built signed notice endpoints for a bid.
+type NoticeURLs struct {
+	NURL string
+	BURL string
+	LURL string
+}
+
+func BuildResponse(req *openrtb.BidRequest, ad adapter.SspAdapter, r Result, notices NoticeURLs) *openrtb.BidResponse {
 	if r.Campaign == nil {
 		return &openrtb.BidResponse{ID: req.ID, Nbr: r.NoBidReason}
 	}
@@ -140,8 +147,9 @@ func BuildResponse(req *openrtb.BidRequest, ad adapter.SspAdapter, r Result) *op
 				ImpID:   impID,
 				Price:   r.Price,
 				AdM:     r.Creative.CDNURL,
-				NURL:    "http://bidder:8081/nurl",
-				BURL:    "http://bidder:8081/burl",
+				NURL:    notices.NURL,
+				BURL:    notices.BURL,
+				LURL:    notices.LURL,
 				CrID:    asset,
 				CID:     strconv.FormatUint(uint64(r.Campaign.ID), 10),
 				W:       r.Creative.Width,

@@ -85,6 +85,7 @@ type Bid struct {
 	AdM     string   `json:"adm,omitempty"`
 	NURL    string   `json:"nurl,omitempty"`
 	BURL    string   `json:"burl,omitempty"`
+	LURL    string   `json:"lurl,omitempty"`
 	CrID    string   `json:"crid"`
 	CID     string   `json:"cid"`
 	W       int      `json:"w,omitempty"`
