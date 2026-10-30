@@ -1,32 +1,42 @@
 # Backlog
 
-The planner owns this list and Sam reorders it. It follows the sprints in `handbook/05-roadmap.md`. The live board for the current sprint is `handbook/STATUS.md`.
+The planner owns this list and Sam reorders it. Priorities follow D-013: P0 blocks a go-live item or money/legal correctness, P1 is needed for the 5 Feb prototype gate, P2 waits until after go-live. The live board is `handbook/STATUS.md`.
 
-## Sprint 0, Foundations (2-13 Nov 2026)
+## Priority queue
 
-| Task | Lane | Notes |
-|---|---|---|
-| 002 CI on every pull request | Platform | Start now |
-| 003 Book spend on plays, not bids | Trading | Start now. Security review |
-| 004 Advertiser App skeleton | Experience | Start now |
-| 001 KPIs from one full-window query | Platform | After 002 |
-| 005 EUR and rename `brain` to `compiler` | Platform, other lanes paused | After 001-004 |
+Work top to bottom. A lane takes the highest item in its lane that has no unmet dependency.
 
-## Sprint 1, Accounts and money (16-27 Nov)
+| # | Item | Lane | Priority | Go-live item | Depends on | State |
+|---|---|---|---|---|---|---|
+| 1 | 002 CI on every pull request | Platform | P0 | protects all | - | building |
+| 2 | 003 Book spend on plays, not bids | Trading | P0 | 2 | - | building |
+| 3 | 004 Advertiser App skeleton | Experience | P0 | 9 | - | building |
+| 4 | Creative approval per SSP before bidding | Trading | P0 | 3 | 003 | to write |
+| 5 | Accounts, organisations, roles, audit log (contract first) | Platform | P0 | 5 | 002 | to write |
+| 6 | 005 EUR across the stack (planned freeze) | Platform, others pause | P0 | 4 | 002, 003, 004 | ready |
+| 7 | Wallet ledger and test-mode card/SEPA payments | Platform | P0 | 4 | accounts | to write |
+| 8 | Lock down ClickHouse password, open ports, demo data | Trading / Platform | P0 | 8 | - | to write |
+| 9 | Hosted staging environment (EU) | Platform | P0 | 8 | Sam's cloud account (O-6) | blocked on Sam |
+| 10 | Advertiser App on real APIs: sign-up, upload, pay, launch, report | Experience | P0 | 9 | accounts, wallet | to write |
+| 11 | Irish compliance gate v1: geofences, category bans, HFSS share, review queue | Trading / Platform | P0 | 6 | accounts | contract early |
+| 12 | Ops Console: real login and server-side roles | Experience | P1 | 5 | accounts | to write |
+| 13 | 001 KPIs from one full-window query | Platform | P1 | - | 002 | ready |
+| 14 | Bidder warm-up and p99 decision time (max ~3.1ms today) | Trading | P1 | 7 | - | to write |
+| 15 | Advertiser Agent v1 and Central Brain v1 | Agents | P1 | - | accounts, compliance | Sprint 4 |
+| 16 | SSP adapter to the partner's spec, reconciliation, load test | Trading | P0 | 1, 2, 7 | partner spec | blocked outside code |
+| 17 | Rename `services/brain` to `services/compiler` | all lanes | P2 | - | after go-live | parked (D-013) |
 
-| Item | Lane | Notes |
-|---|---|---|
-| Accounts, organisations, roles, sessions | Platform | Contract first. Security review |
-| Wallet ledger and test-mode payments | Platform | Needs a payment provider account in test mode |
-| Hosted staging environment (EU) | Platform | Needs Sam's cloud account |
-| Ops Console: real login and server-side roles | Experience | After accounts |
-| Bidder warm-up and p99 decision time | Trading | The max decision time is ~3.1ms today |
-| ClickHouse password, closed ports, demo data clean-up | Trading / Platform | Must happen before staging is public |
+Platform can pick up 001 in a gap (for example while the accounts contract is being written), because it is small and already written.
 
-## Later sprints
+## Outside the code (Sam), P0
 
-Sprint 2: Advertiser App on real APIs. Sprint 3: compliance engine. Sprint 4: Advertiser Agent, Central Brain and creative studio. Sprint 5: SSP adapter, reconciliation and load test. These are broken into tasks at the start of each sprint, once the previous sprint shows what's real.
+The launch date depends on these, not on the build:
 
-## Blocked outside the code
+- Start talking to SSPs now (VIOOH, JCDecaux and others): we need an integration spec, a sandbox and a certification date. Item 16 can't start without them.
+- Register the company and open a payment provider account (test mode is enough until UAT).
+- Staging cloud account (O-6) by Sprint 1.
+- Repo private (O-4).
 
-- A live SSP adapter needs an SSP's integration spec and sandbox (supply outreach)
+## Sprint view
+
+The sprints in `handbook/05-roadmap.md` still hold. The priority queue only decides what a free lane picks up next, so work can run ahead of its sprint.

@@ -54,6 +54,15 @@ Why: one agent is too slow for the scope, and more than three or four at once co
 Businesses and creators first, individuals after media-owner approval. No alcohol, gambling or political ads in the prototype.
 Why: these are the highest legal and reputational risks, and the prototype doesn't need them to prove the model.
 
+**D-013 · Priority order follows the go-live critical path** (30 Oct 2026, Claude, at Sam's request to build what is most core and urgent first)
+Every backlog item gets a priority:
+- **P0**: blocks one of the ten go-live items (`handbook/05-roadmap.md`), or the correctness of money or legal compliance.
+- **P1**: needed for the 5 Feb prototype gate, but nothing else waits on it.
+- **P2**: can wait until after go-live.
+
+Within P0, work with outside lead time goes first, because the supply side sets the launch date. That means anything an SSP will check when certifying us: spend on billing notices, creative approval per partner, signed notices and latency. Next come accounts and the wallet, which everything customer-facing depends on, then the Irish compliance gate. The rename of `services/brain` to `services/compiler` is P2 and moves out of task 005. It touches every lane, pauses all builders and changes nothing a customer or an SSP sees. Task 005 keeps only the EUR work.
+Why: three builders can produce more than one reviewer can check, so the order of work matters more than its speed. Building P0 first means that if time runs short, what's missing is polish, not something go-live needs.
+
 ## Open (Sam to answer)
 
 **O-4 · Repo visibility.** This repo is public, including the bidding logic and the compliance rulebook. Proposed: make it private and move it to a company GitHub Organization, with the co-founder added as a collaborator. Until then, commercial details stay out of the repo.

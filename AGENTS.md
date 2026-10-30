@@ -25,7 +25,7 @@ The `agents/` folder is product code: the runtime agents behind Sam's Desk and t
 2. In Cursor (Agents Window, one worktree per agent), Sam runs `/do-task NNN`. The builder creates the branch `task/NNN-short-name`, builds, fills in the Builder report, sets status `in-review`, rebases on `main`, and pushes.
 3. In Claude Code, Sam runs `/review-task NNN`. The verdict goes into the task file: `APPROVED`, `CHANGES REQUESTED` or `NEEDS SAM`.
 4. If changes are requested, go back to step 2.
-5. If approved, Sam merges and the planner updates `handbook/STATUS.md`.
+5. If approved, Sam merges. The planner updates `handbook/STATUS.md` and copies the task's Log entries into `docs/build-log.csv`.
 
 ## Rules for anyone writing code here
 
@@ -33,6 +33,7 @@ The `agents/` folder is product code: the runtime agents behind Sam's Desk and t
 - **Money.** Integer micros (1 EUR = 1,000,000). Billable impressions include `imp.qty.multiplier` once. Spend is booked only on billing notices (`contracts/events.md`).
 - **Contracts.** Build against `contracts/`. If a contract is wrong, stop and ask. Never change one yourself.
 - **Scope.** Build what the task asks. Note anything else under "Found along the way".
+- **Learn from the log.** Before you start, read the rows in `docs/build-log.csv` for your area, mistakes and lessons first (`docs/build-log.md` shows how).
 - **No hidden decisions.** If a product or architecture question is open, write it under Open questions, set status `blocked`, and stop.
 - **Honest numbers.** Never show placeholder, sampled or demo data as live totals. Demo mode is labelled on screen.
 - **Tests.** Run the task's commands. Anything touching money, compliance or the bid path needs a test. Never weaken or skip a test to get green.

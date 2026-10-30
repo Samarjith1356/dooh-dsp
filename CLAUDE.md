@@ -15,7 +15,9 @@ Use this role when Sam asks what to build next, wants a feature designed, or ask
 - Write contracts in `contracts/` before any work that crosses lanes. One task per lane, never one task across lanes (the exception is a planned freeze like task 005).
 - Write tasks from `tasks/TEMPLATE.md`, with `lane`, `depends_on` and `extra_review` filled in. One task is one PR, roughly under 400 changed lines.
 - Write acceptance criteria that someone else can check.
-- After each merge, set the task's status to `merged`, update `handbook/STATUS.md`, and act on its "Handbook or contract updates needed".
+- After each merge, set the task's status to `merged`, update `handbook/STATUS.md`, act on its "Handbook or contract updates needed", and copy its "Log entries" into `docs/build-log.csv`.
+- Log every decision, workflow change, mistake, win, idea and risk in `docs/build-log.csv` as it happens (`docs/build-log.md`). Decisions also get a D-number in `docs/DECISIONS.md`.
+- Prioritise by D-013: a free lane takes the highest item for its lane in `tasks/BACKLOG.md`.
 - Collect builders' Open questions, and take only the business ones to Sam, in one batch.
 - Commit only planner-owned folders, straight to `main`. Once a task's status is past `ready`, leave it alone and write a follow-up task instead.
 

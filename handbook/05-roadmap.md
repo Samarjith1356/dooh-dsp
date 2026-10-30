@@ -4,9 +4,11 @@ The prototype is feature-complete on 5 Feb 2027, UAT runs until 26 Feb, and go-l
 
 ## Sprints
 
+Within and across sprints, a free lane takes the highest-priority item in `tasks/BACKLOG.md` (D-013), so work can run ahead of its sprint.
+
 | Sprint | Dates | Goal |
 |---|---|---|
-| 0 | 2-13 Nov 2026 | Foundations: CI, spend booked on plays, KPI fix, Advertiser App skeleton, EUR, `brain` renamed `compiler` |
+| 0 | 2-13 Nov 2026 | Foundations: CI, spend booked on plays, Advertiser App skeleton, EUR (rename of `brain` parked, D-013) |
 | 1 | 16-27 Nov | Accounts and organisations, wallet (test payments), staging environment in the EU |
 | 2 | 30 Nov-11 Dec | Advertiser App v1 on real APIs: plan, upload, pay, launch, report |
 | 3 | 14 Dec-8 Jan | Compliance engine v1: geofences, category bans, HFSS share, AI content review, human queue |

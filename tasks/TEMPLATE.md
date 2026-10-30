@@ -45,5 +45,8 @@ _The builder writes here if blocked. Claude or Sam answers here._
 ## Builder report
 _Filled in by Cursor._
 
+### Log entries
+_One line each, for `docs/build-log.csv`: type (mistake, win, idea, risk or question), area, what happened, and the lesson. Include what went wrong and what worked well. Write "None" if there is nothing._
+
 ## Review
 _Filled in by Claude Code._

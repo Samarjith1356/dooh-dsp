@@ -16,6 +16,8 @@ Then read these:
 
 - [`AGENTS.md`](../AGENTS.md): the rules every coding tool follows
 - [`docs/DECISIONS.md`](../docs/DECISIONS.md): decisions made and still open
+- [`docs/build-log.csv`](../docs/build-log.csv): every decision, mistake, win, idea and risk so far, one row each. Read the rows for your area before you start ([how](../docs/build-log.md))
+- [`tasks/BACKLOG.md`](../tasks/BACKLOG.md): the priority queue (D-013)
 - [`contracts/`](../contracts/): the interfaces between lanes, which no builder changes alone
 - [`tasks/`](../tasks/): the work orders
 
