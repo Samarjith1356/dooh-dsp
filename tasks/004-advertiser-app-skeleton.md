@@ -2,7 +2,7 @@
 id: 004
 title: Advertiser App skeleton, every screen working on demo data
 lane: experience
-status: building
+status: in-review
 depends_on: []
 extra_review: []
 branch: task/004-advertiser-app-skeleton
@@ -66,7 +66,40 @@ _None yet._
 ---
 
 ## Builder report
-_Filled in by Cursor._
+
+### Files changed
+- `apps/advertiser/**` (new) — Next.js 15 App Router app on port 3001
+- `apps/advertiser/lib/api.ts` — contract types + typed client; mock default, live stub
+- `apps/advertiser/lib/mock.ts` — in-memory mock with ~10 Dublin screens, demo campaigns, localStorage try/catch
+- `apps/advertiser/components/ui/*` — UI primitives copied from `apps/web`
+- `apps/advertiser/components/blocks/screen-map.tsx` — Leaflet map for screen pick / campaign view
+- `apps/advertiser/app/{signup,profile,home,campaigns/new,campaigns/[id],wallet,assistant}` — screens 1–7
+- `apps/advertiser/e2e/*` — Playwright smoke + creative/category/layout checks
+- `apps/advertiser/README.md` — how to run and how to switch to the live API later
+
+### Acceptance criteria
+- [x] `npm run build` and `npm run test:e2e` pass — build green; 4 Playwright tests passed
+- [x] Every screen reachable from Home; finishing wizard adds campaign — `sign-up, full new campaign, appears on Home`
+- [x] Creative check rejects 1000×1000 and 20s video, accepts 1920×1080 PNG — `creative check rejects bad image and long video; accepts 1920x1080`
+- [x] Alcohol/gambling/political refused and campaign blocked — `alcohol category shows refusal…` (same refused list for gambling/political)
+- [x] Estimate shown as range and updates with budget — asserted in smoke (`Estimated plays` with `–`, range changes after budget 200→400)
+- [x] Demo banner on every screen in mock; Assistant labelled AI — `demo banner and AI label; layout at 375px`
+- [x] Layout at 375px and 1280px; no horizontal scroll at 375px — same test
+- [x] No number presented as real on mock — Demo data banner + “demo” labels on wallet/campaigns/estimates
+
+### Tests
+```
+cd apps/advertiser && npm install && npm run build && npm run test:e2e
+```
+Result: build succeeded; `4 passed` (Playwright chromium).
+
+### Found along the way
+- `next@15.1.3` npm warn about a published CVE; matched `apps/web` on purpose. Planner may want a shared bump later.
+- Live API path intentionally throws until Platform ships endpoints.
+
+### Handbook or contract updates needed
+- After merge: note Advertiser App exists at `apps/advertiser` (port 3001, mock-first) in STATUS / architecture handbook.
 
 ## Review
 _Filled in by Claude Code._
+

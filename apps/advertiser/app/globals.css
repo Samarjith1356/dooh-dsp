@@ -1,0 +1,38 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 222 20% 7%;
+  --foreground: 210 20% 92%;
+  --card: 222 18% 10%;
+  --card-foreground: 210 20% 92%;
+  --popover: 222 18% 10%;
+  --popover-foreground: 210 20% 92%;
+  --primary: 38 48% 56%;
+  --primary-foreground: 222 30% 8%;
+  --secondary: 222 14% 16%;
+  --secondary-foreground: 210 16% 86%;
+  --muted: 222 12% 14%;
+  --muted-foreground: 215 12% 62%;
+  --accent: 222 12% 16%;
+  --accent-foreground: 210 20% 92%;
+  --destructive: 0 62% 48%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 222 12% 18%;
+  --input: 222 12% 18%;
+  --ring: 38 48% 56%;
+}
+
+* {
+  @apply border-border;
+}
+
+body {
+  @apply bg-background text-foreground antialiased;
+  overflow-x: hidden;
+}
+
+.leaflet-container {
+  @apply h-full w-full rounded-md bg-muted;
+}
