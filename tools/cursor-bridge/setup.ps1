@@ -5,6 +5,9 @@
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $bridge = Join-Path $PSScriptRoot 'cursor_bridge.py'
+$logDir = Join-Path $repo '.cursor-bridge'
+New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+Start-Transcript -Path (Join-Path $logDir 'setup-log.txt') -Force | Out-Null
 Write-Host ""
 Write-Host "== Cursor connector setup ==" -ForegroundColor Cyan
 Write-Host "Repo: $repo"
@@ -69,37 +72,51 @@ Write-Host "Commit hook enabled, local job folders ignored."
 # 4. Register with the Claude desktop app
 Write-Host ""
 Write-Host "[4/5] Claude desktop config" -ForegroundColor Cyan
-$candidates = @(Join-Path $env:APPDATA 'Claude\claude_desktop_config.json')
+$utf8 = New-Object System.Text.UTF8Encoding($false)
+$realCfg = Join-Path $env:APPDATA 'Claude\claude_desktop_config.json'
+$targets = @($realCfg)
 $pkgRoot = Join-Path $env:LOCALAPPDATA 'Packages'
 if (Test-Path $pkgRoot) {
     Get-ChildItem $pkgRoot -Directory -Filter 'Claude_*' -ErrorAction SilentlyContinue | ForEach-Object {
-        $candidates += (Join-Path $_.FullName 'LocalCache\Roaming\Claude\claude_desktop_config.json')
+        $targets += (Join-Path $_.FullName 'LocalCache\Roaming\Claude\claude_desktop_config.json')
     }
 }
-$targets = @($candidates | Where-Object { Test-Path $_ })
-if ($targets.Count -eq 0) {
-    $targets = @($candidates[0])
-    New-Item -ItemType Directory -Force -Path (Split-Path $targets[0]) | Out-Null
-    [System.IO.File]::WriteAllText($targets[0], '{}', (New-Object System.Text.UTF8Encoding($false)))
+# Start from whichever existing config has the most servers, so nothing already set up is lost
+$base = '{}'
+$bestCount = -1
+foreach ($t in $targets) {
+    if (Test-Path $t) {
+        $raw = Get-Content $t -Raw
+        Write-Host "Found config: $t"
+        try {
+            $obj = $raw | ConvertFrom-Json
+            $n = 0
+            if ($obj.PSObject.Properties.Name -contains 'mcpServers') { $n = @($obj.mcpServers.PSObject.Properties).Count }
+            Write-Host ("  servers: " + (($obj.mcpServers.PSObject.Properties.Name) -join ', '))
+            if ($n -gt $bestCount) { $bestCount = $n; $base = $raw }
+        } catch { Write-Host "  (could not parse this file: $_)" }
+    } else { Write-Host "No config yet at: $t" }
 }
-foreach ($cfgPath in $targets) {
-    Copy-Item $cfgPath ("$cfgPath.bak-" + (Get-Date -Format 'yyyyMMdd-HHmmss'))
-    $raw = Get-Content $cfgPath -Raw
-    if ([string]::IsNullOrWhiteSpace($raw)) { $raw = '{}' }
-    $cfg = $raw | ConvertFrom-Json
-    if (-not ($cfg.PSObject.Properties.Name -contains 'mcpServers')) {
-        $cfg | Add-Member -NotePropertyName 'mcpServers' -NotePropertyValue ([pscustomobject]@{})
-    }
-    $entry = [pscustomobject]@{
-        command = $python
-        args    = @($bridge)
-        env     = [pscustomobject]@{ DOOH_REPO = $repo; CURSOR_AGENT_PATH = $agent }
-    }
-    $cfg.mcpServers | Add-Member -NotePropertyName 'cursor-bridge' -NotePropertyValue $entry -Force
-    $json = $cfg | ConvertTo-Json -Depth 32
-    [System.IO.File]::WriteAllText($cfgPath, $json, (New-Object System.Text.UTF8Encoding($false)))
-    Write-Host "Updated: $cfgPath (backup saved next to it)"
+if ([string]::IsNullOrWhiteSpace($base)) { $base = '{}' }
+$cfg = $base | ConvertFrom-Json
+if (-not $cfg) { $cfg = [pscustomobject]@{} }
+if (-not ($cfg.PSObject.Properties.Name -contains 'mcpServers')) {
+    $cfg | Add-Member -NotePropertyName 'mcpServers' -NotePropertyValue ([pscustomobject]@{})
 }
+$entry = [pscustomobject]@{
+    command = $python
+    args    = @($bridge)
+    env     = [pscustomobject]@{ DOOH_REPO = $repo; CURSOR_AGENT_PATH = $agent }
+}
+$cfg.mcpServers | Add-Member -NotePropertyName 'cursor-bridge' -NotePropertyValue $entry -Force
+$json = $cfg | ConvertTo-Json -Depth 32
+foreach ($t in $targets) {
+    New-Item -ItemType Directory -Force -Path (Split-Path $t) | Out-Null
+    if (Test-Path $t) { Copy-Item $t ("$t.bak-" + (Get-Date -Format 'yyyyMMdd-HHmmss')) }
+    [System.IO.File]::WriteAllText($t, $json, $utf8)
+    Write-Host "Wrote: $t"
+}
+Write-Host ("Servers now configured: " + (($cfg.mcpServers.PSObject.Properties.Name) -join ', '))
 
 # 5. Cursor login and health check
 Write-Host ""
@@ -118,5 +135,23 @@ $env:CURSOR_AGENT_PATH = $agent
 & $python $bridge --self-test
 
 Write-Host ""
-Write-Host "Done. Now fully quit Claude (right-click its tray icon > Quit) and open it again." -ForegroundColor Green
-Write-Host "Then go back to the chat and say: connector ready." -ForegroundColor Green
+Write-Host "[done] Restarting Claude so it loads the connector..." -ForegroundColor Cyan
+$claudeProcs = Get-Process -Name 'Claude' -ErrorAction SilentlyContinue
+$claudeExe = $null
+if ($claudeProcs) { $claudeExe = ($claudeProcs | Where-Object { $_.Path } | Select-Object -First 1).Path }
+$pkg = Get-AppxPackage -Name 'Claude*' -ErrorAction SilentlyContinue | Select-Object -First 1
+Write-Host "Claude processes: $(@($claudeProcs).Count)  exe: $claudeExe  store package: $($pkg.PackageFamilyName)"
+if ($claudeProcs) { $claudeProcs | Stop-Process -Force; Start-Sleep -Seconds 3 }
+$started = $false
+if ($pkg) {
+    try {
+        $appId = (Get-AppxPackageManifest $pkg).Package.Applications.Application | Select-Object -First 1 -ExpandProperty Id
+        Start-Process ("shell:AppsFolder\" + $pkg.PackageFamilyName + "!" + $appId)
+        $started = $true
+    } catch { Write-Host "Could not start the Store app: $_" }
+}
+if (-not $started -and $claudeExe) { Start-Process $claudeExe; $started = $true }
+if ($started) { Write-Host "Claude restarted." -ForegroundColor Green } else { Write-Host "Please open Claude again yourself." -ForegroundColor Yellow }
+Write-Host ""
+Write-Host "Done. Go back to the chat and say: connector ready." -ForegroundColor Green
+Stop-Transcript | Out-Null
