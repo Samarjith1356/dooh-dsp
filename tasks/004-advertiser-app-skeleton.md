@@ -2,7 +2,7 @@
 id: 004
 title: Advertiser App skeleton, every screen working on demo data
 lane: experience
-status: in-review
+status: building
 depends_on: []
 extra_review: []
 branch: task/004-advertiser-app-skeleton
