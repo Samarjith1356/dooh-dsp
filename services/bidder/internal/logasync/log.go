@@ -2,9 +2,10 @@ package logasync
 
 import (
 	"bytes"
-	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -24,59 +25,197 @@ type Event struct {
 	BillableImps  float64 `json:"billable_imps"`
 	SpendMicros   int64   `json:"spend_micros"`
 	SnapshotID    uint64  `json:"snapshot_id"`
+
+	// At is the event time in unix nanos. The bid path sets this instead of
+	// formatting EventTime; the writer goroutine formats it.
+	At int64 `json:"-"`
 }
 
+const (
+	batchMax   = 512
+	flushEvery = 50 * time.Millisecond
+)
+
+// Writer ships events from one background goroutine, in batches, to a sink:
+// Kafka (NewKafka) or ingest's HTTP batch endpoint (New). Log never blocks:
+// when the buffer is full the event is counted in Dropped and discarded.
 type Writer struct {
-	ch     chan Event
-	ingest string
+	ch      chan Event
+	ship    func(batch []Event)
+	dropped atomic.Uint64
+	failed  atomic.Uint64
+
+	url    string
 	client *http.Client
+	buf    []byte
 }
 
+func newWriter() *Writer {
+	return &Writer{ch: make(chan Event, 16384)}
+}
+
+// New ships to ingest over HTTP. ".../events" is upgraded to
+// ".../events/batch"; any other URL must accept a JSON array of events.
+// An empty URL discards events.
 func New(ingest string) *Writer {
-	w := &Writer{
-		ch:     make(chan Event, 8192),
-		ingest: strings.TrimSpace(ingest),
-		client: &http.Client{
-			Timeout: 400 * time.Millisecond,
-			Transport: &http.Transport{
-				MaxIdleConns:        32,
-				MaxIdleConnsPerHost: 32,
-				IdleConnTimeout:     30 * time.Second,
-			},
+	w := newWriter()
+	w.url = strings.TrimSpace(ingest)
+	if strings.HasSuffix(w.url, "/events") {
+		w.url += "/batch"
+	}
+	w.client = &http.Client{
+		Timeout: 2 * time.Second,
+		Transport: &http.Transport{
+			MaxIdleConns:        4,
+			MaxIdleConnsPerHost: 4,
+			IdleConnTimeout:     90 * time.Second,
 		},
+	}
+	w.ship = func(batch []Event) {
+		if w.url == "" {
+			return
+		}
+		w.buf = AppendBatch(w.buf[:0], batch)
+		w.post(w.buf, len(batch))
 	}
 	go w.loop()
 	return w
 }
 
 func (w *Writer) Log(e Event) {
-	if e.EventTime == "" {
-		e.EventTime = time.Now().UTC().Format(time.RFC3339Nano)
+	if e.EventTime == "" && e.At == 0 {
+		e.At = time.Now().UnixNano()
 	}
 	select {
 	case w.ch <- e:
 	default:
+		w.dropped.Add(1)
 	}
 }
 
+// Dropped counts events discarded because the buffer was full.
+func (w *Writer) Dropped() uint64 { return w.dropped.Load() }
+
+// Failed counts events the sink could not deliver.
+func (w *Writer) Failed() uint64 { return w.failed.Load() }
+
 func (w *Writer) loop() {
-	for e := range w.ch {
-		if w.ingest == "" {
-			continue
+	batch := make([]Event, 0, batchMax)
+	tick := time.NewTicker(flushEvery)
+	defer tick.Stop()
+	flush := func() {
+		if len(batch) == 0 {
+			return
 		}
-		payload, err := json.Marshal(e)
-		if err != nil {
-			continue
-		}
-		req, err := http.NewRequest(http.MethodPost, w.ingest, bytes.NewReader(payload))
-		if err != nil {
-			continue
-		}
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := w.client.Do(req)
-		if err != nil {
-			continue
-		}
-		resp.Body.Close()
+		w.ship(batch)
+		clear(batch)
+		batch = batch[:0]
 	}
+	for {
+		select {
+		case e := <-w.ch:
+			batch = append(batch, e)
+			if len(batch) >= batchMax {
+				flush()
+			}
+		case <-tick.C:
+			flush()
+		}
+	}
+}
+
+func (w *Writer) post(body []byte, n int) {
+	req, err := http.NewRequest(http.MethodPost, w.url, bytes.NewReader(body))
+	if err != nil {
+		w.failed.Add(uint64(n))
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := w.client.Do(req)
+	if err != nil {
+		w.failed.Add(uint64(n))
+		return
+	}
+	resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		w.failed.Add(uint64(n))
+	}
+}
+
+// AppendBatch encodes events as a JSON array.
+func AppendBatch(dst []byte, events []Event) []byte {
+	dst = append(dst, '[')
+	for i := range events {
+		if i > 0 {
+			dst = append(dst, ',')
+		}
+		dst = appendEvent(dst, &events[i])
+	}
+	return append(dst, ']')
+}
+
+func appendEvent(dst []byte, e *Event) []byte {
+	dst = append(dst, `{"event_type":`...)
+	dst = appendStr(dst, e.EventType)
+	dst = append(dst, `,"event_time":"`...)
+	if e.EventTime != "" {
+		dst = appendInner(dst, e.EventTime)
+	} else {
+		dst = time.Unix(0, e.At).UTC().AppendFormat(dst, time.RFC3339Nano)
+	}
+	dst = append(dst, `","advertiser_id":`...)
+	dst = strconv.AppendUint(dst, uint64(e.AdvertiserID), 10)
+	dst = append(dst, `,"campaign_id":`...)
+	dst = strconv.AppendUint(dst, uint64(e.CampaignID), 10)
+	dst = append(dst, `,"ssp":`...)
+	dst = appendStr(dst, e.SSP)
+	dst = append(dst, `,"country":`...)
+	dst = appendStr(dst, e.Country)
+	dst = append(dst, `,"venue_type":`...)
+	dst = appendStr(dst, e.VenueType)
+	dst = append(dst, `,"h3":`...)
+	dst = strconv.AppendUint(dst, e.H3, 10)
+	dst = append(dst, `,"creative_id":`...)
+	dst = strconv.AppendUint(dst, uint64(e.CreativeID), 10)
+	dst = append(dst, `,"bid_request_id":`...)
+	dst = appendStr(dst, e.BidRequestID)
+	dst = append(dst, `,"price_cpm":`...)
+	dst = strconv.AppendFloat(dst, e.PriceCPM, 'g', -1, 64)
+	dst = append(dst, `,"qty_multiplier":`...)
+	dst = strconv.AppendFloat(dst, e.QtyMultiplier, 'g', -1, 64)
+	dst = append(dst, `,"billable_imps":`...)
+	dst = strconv.AppendFloat(dst, e.BillableImps, 'g', -1, 64)
+	dst = append(dst, `,"spend_micros":`...)
+	dst = strconv.AppendInt(dst, e.SpendMicros, 10)
+	dst = append(dst, `,"snapshot_id":`...)
+	dst = strconv.AppendUint(dst, e.SnapshotID, 10)
+	return append(dst, '}')
+}
+
+func appendStr(dst []byte, s string) []byte {
+	dst = append(dst, '"')
+	dst = appendInner(dst, s)
+	return append(dst, '"')
+}
+
+func appendInner(dst []byte, s string) []byte {
+	const hex = "0123456789abcdef"
+	start := 0
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 0x20 && c != '"' && c != '\\' {
+			continue
+		}
+		dst = append(dst, s[start:i]...)
+		switch c {
+		case '"', '\\':
+			dst = append(dst, '\\', c)
+		case '\n':
+			dst = append(dst, '\\', 'n')
+		default:
+			dst = append(dst, '\\', 'u', '0', '0', hex[c>>4], hex[c&0xF])
+		}
+		start = i + 1
+	}
+	return append(dst, s[start:]...)
 }
