@@ -8,9 +8,10 @@ Work top to bottom. A lane takes the highest item in its lane that has no unmet 
 
 | # | Item | Lane | Priority | Go-live item | Depends on | State |
 |---|---|---|---|---|---|---|
-| 1 | 002 CI on every pull request | Platform | P0 | protects all | - | building |
-| 2 | 003 Book spend on plays, not bids | Trading | P0 | 2 | - | building |
-| 3 | 004 Advertiser App skeleton | Experience | P0 | 9 | - | building |
+| 1 | 002 CI on every pull request | Platform | P0 | protects all | - | merged |
+| 2 | 003 Book spend on plays, not bids | Trading | P0 | 2 | - | in review |
+| 2b | 006 Brain seeding without a database (CI green) | Trading | P0 | protects all | 002 | ready |
+| 3 | 004 Advertiser App skeleton | Experience | P0 | 9 | - | in review |
 | 4 | Creative approval per SSP before bidding | Trading | P0 | 3 | 003 | to write |
 | 5 | Accounts, organisations, roles, audit log (contract first) | Platform | P0 | 5 | 002 | to write |
 | 6 | 005 EUR across the stack (planned freeze) | Platform, others pause | P0 | 4 | 002, 003, 004 | ready |
