@@ -17,6 +17,8 @@ type Result struct {
 	Qty         float64
 	SpendMicros int64
 	NoBidReason int
+
+	index int // campaign position in the snapshot (Engine results only)
 }
 
 func Match(snap *snapshot.RulesSnapshot, imp adapter.CanonicalImp, now time.Time, bud *budget.Cache) Result {
